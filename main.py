@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, StringVar, BooleanVar
 from pymongo import MongoClient
 import pandas as pd
 from datetime import datetime
@@ -7,8 +7,6 @@ from collections import defaultdict
 import json
 import math
 import numbers
-from functools import lru_cache
-import threading
 
 
 class EnhancedNissanGUI:
@@ -28,7 +26,6 @@ class EnhancedNissanGUI:
         self.page_size = 100
         self.total_records = 0
         self.all_columns = []
-        self.display_columns = []  # Колонки для отображения (только те, что есть в данных)
         self.column_types = {}
         self.unique_values_cache = defaultdict(list)
 
@@ -51,28 +48,13 @@ class EnhancedNissanGUI:
         self.last_click_time = 0
         self.last_click_column = None
 
-        # Кэширование данных для быстрой загрузки
-        self.data_cache = {}
-        self.current_query = None
-        self.loading_in_progress = False
-
-        # Для управления шириной колонок
-        self.column_widths = {}
-        self.min_column_width = 120
-        self.max_column_width = 400
-        self.default_column_width = 200
-
-        # Оптимизация: заранее загружаем схему
-        self.detect_schema()
-
         self.setup_ui()
 
     def setup_ui(self):
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Удалена верхняя панель с окном и кнопкой статистики
-
+        self.create_top_panel(main_container)
         self.create_filters_panel(main_container)
 
         # Создаем контейнер для таблицы и панели агрегации
@@ -82,10 +64,8 @@ class EnhancedNissanGUI:
         # Создаем общую подложку для таблицы, поиска и пагинации
         self.table_main_container = ctk.CTkFrame(
             table_agg_container,
-            corner_radius=12,
-            fg_color=("#f0f0f0", "#2a2a2a"),
-            border_width=1,
-            border_color=("#d0d0d0", "#404040")
+            corner_radius=15,
+            fg_color="transparent"
         )
         self.table_main_container.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -96,18 +76,31 @@ class EnhancedNissanGUI:
         # Создаем панель поиска над таблицей
         self.create_search_panel(table_pagination_container)
 
-        # Создаем панель таблицы С ГОРИЗОНТАЛЬНЫМ СКРОЛЛОМ
+        # Создаем панель таблицы
         self.create_table_panel(table_pagination_container)
 
         # Создаем панель пагинации под таблицей
         self.create_pagination_panel(table_pagination_container)
 
-        # Создаем панель агрегации с подложкой
+        # Создаем панель агрегации под таблицей
         self.create_aggregation_panel(table_agg_container)
 
-        # При запуске сразу показываем все фильтры по всем столбцам
-        self.root.after(100, self.create_all_filters)
-        self.load_data()
+        self.load_initial_data()
+
+    def create_top_panel(self, parent):
+        top_frame = ctk.CTkFrame(parent, height=60)
+        top_frame.pack(fill="x", padx=0, pady=(0, 5))
+
+        title_label = ctk.CTkLabel(top_frame,
+                                   text="🚗 Nissan Vehicles Database",
+                                   font=ctk.CTkFont(size=24, weight="bold"))
+        title_label.pack(side="left", padx=20)
+
+        button_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        button_frame.pack(side="right", padx=20)
+
+        ctk.CTkButton(button_frame, text="Статистика",
+                      width=100, command=self.show_statistics).pack(side="left", padx=5)
 
     def create_filters_panel(self, parent):
         filters_container = ctk.CTkFrame(parent)
@@ -140,11 +133,11 @@ class EnhancedNissanGUI:
 
         # Цвета подложки для разных фильтров (циклически)
         bg_colors = [
-            ("#f5f5f5", "#2a2d2e"),  # Светлый/Темный
-            ("#f0f8ff", "#2d2a3e"),  # Светлый/Темный фиолетовый
-            ("#f8f0ff", "#2a3e2d"),  # Светлый/Темный зеленый
-            ("#fff8f0", "#3e2d2a"),  # Светлый/Темный коричневый
-            ("#f0fff8", "#2d2d3e"),  # Светлый/Темный синий
+            ("#2a2d2e", "#2a2d2e"),  # Темные тона для темной темы
+            ("#2d2a3e", "#2d2a3e"),
+            ("#2a3e2d", "#2a3e2d"),
+            ("#3e2d2a", "#3e2d2a"),
+            ("#2d2d3e", "#2d2d3e"),
         ]
         bg_color = bg_colors[index % len(bg_colors)]
 
@@ -154,7 +147,7 @@ class EnhancedNissanGUI:
             corner_radius=10,
             fg_color=bg_color,
             border_width=1,
-            border_color=("#d0d0d0", "#3a3a3a")
+            border_color=("#3a3a3a", "#3a3a3a")
         )
         condition_frame.pack(fill="x", padx=5, pady=5, ipadx=5, ipady=5)
 
@@ -278,6 +271,10 @@ class EnhancedNissanGUI:
             'remove_btn': remove_btn
         }
 
+    def on_column_change(self, filter_id):
+        """Обработка изменения колонки"""
+        self.apply_filter_condition(filter_id)
+
     def on_value_logic_change(self, filter_id, row_index):
         """Обработка изменения логического оператора для значения"""
         self.apply_filter_condition(filter_id)
@@ -352,12 +349,67 @@ class EnhancedNissanGUI:
                     # Обновляем окно
                     self.filters_scroll.update_idletasks()
 
+    def remove_filter_condition(self, filter_id):
+        """Удаляет условие фильтрации"""
+        if 0 <= filter_id < len(self.filter_conditions):
+            # Не позволяем удалить стандартные фильтры
+            widgets = self.filter_conditions[filter_id]['widgets']
+            if widgets.get('is_preset', False):
+                messagebox.showwarning("Предупреждение", "Нельзя удалить стандартный фильтр")
+                return
+
+            # Не позволяем удалить единственный фильтр
+            if len(self.filter_conditions) == 1:
+                messagebox.showwarning("Предупреждение", "Нельзя удалить единственный фильтр")
+                return
+
+            # Удаляем фрейм с виджетами
+            self.filter_conditions[filter_id]['widgets']['frame'].destroy()
+
+            # Удаляем из списков
+            del self.filter_conditions[filter_id]
+            del self.filter_widgets[filter_id]
+
+            # Обновляем ID оставшихся условий
+            for i, condition in enumerate(self.filter_conditions):
+                condition['id'] = i
+                # Обновляем заголовок
+                widgets = condition['widgets']
+                for child in widgets['frame'].winfo_children():
+                    if isinstance(child, ctk.CTkFrame):
+                        for grandchild in child.winfo_children():
+                            if isinstance(grandchild, ctk.CTkLabel) and "Фильтр" in grandchild.cget("text"):
+                                # Для стандартных фильтров показываем название колонки
+                                if widgets.get('is_preset', False):
+                                    col_name = widgets['col_var'].get()
+                                    grandchild.configure(text=f"Фильтр #{i + 1}: {col_name}")
+                                else:
+                                    grandchild.configure(text=f"Фильтр #{i + 1}")
+                                break
+
+            # Обновляем данные
+            self.load_data()
+
     def apply_filter_condition(self, filter_id):
         """Применяет одно условие фильтрации"""
         if hasattr(self, '_filter_timer'):
             self.root.after_cancel(self._filter_timer)
 
         self._filter_timer = self.root.after(500, self.load_data)
+
+    def update_filter_columns(self):
+        """Обновляет список колонок во всех фильтрах"""
+        if not self.all_columns:
+            return
+
+        for condition in self.filter_conditions:
+            widgets = condition['widgets']
+            if 'col_combo' in widgets:
+                current_value = widgets['col_var'].get()
+                widgets['col_combo'].configure(values=self.all_columns)
+                # Если текущее значение не в списке, устанавливаем первое значение
+                if current_value not in self.all_columns and self.all_columns:
+                    widgets['col_var'].set(self.all_columns[0])
 
     def build_query(self):
         """Строит MongoDB запрос из условий фильтрации"""
@@ -704,7 +756,7 @@ class EnhancedNissanGUI:
         self.table_container = ctk.CTkFrame(parent, fg_color="transparent")
         self.table_container.pack(fill="both", expand=True, pady=(0, 10))
 
-        # Создаем CTkScrollableFrame для таблицы с оптимизацией
+        # Создаем CTkScrollableFrame для таблицы
         self.table_scrollable = ctk.CTkScrollableFrame(
             self.table_container,
             fg_color="transparent",
@@ -715,33 +767,39 @@ class EnhancedNissanGUI:
         )
         self.table_scrollable.pack(fill="both", expand=True)
 
-        # Контейнер для таблицы (будет заполняться динамически)
-        self.table_content_frame = ctk.CTkFrame(self.table_scrollable, fg_color="transparent")
-        self.table_content_frame.pack(fill="both", expand=True)
+        # Создаем CTkTabview вместо Treeview
+        self.create_ctk_table()
+
+    def create_ctk_table(self):
+        """Создает таблицу с использованием CTkFrame и CTkLabel"""
+        # Очищаем существующую таблицу
+        for widget in self.table_scrollable.winfo_children():
+            widget.destroy()
+
+        # Контейнер для заголовков
+        self.header_frame = ctk.CTkFrame(self.table_scrollable, fg_color="#3a3a3a", height=40)
+        self.header_frame.pack(fill="x", pady=(0, 1))
+
+        # Контейнер для данных (будет заполняться динамически)
+        self.data_frame = ctk.CTkFrame(self.table_scrollable, fg_color="transparent")
+        self.data_frame.pack(fill="both", expand=True)
 
     def create_table_headers(self, columns):
-        """Создает заголовки таблицы с горизонтальным скроллом"""
-        # Очищаем только если необходимо
-        if hasattr(self, 'header_frame') and self.header_frame.winfo_exists():
-            for widget in self.header_frame.winfo_children():
-                widget.destroy()
-        else:
-            self.header_frame = ctk.CTkFrame(self.table_content_frame, fg_color="#3a3a3a", height=40)
-            self.header_frame.pack(fill="x", pady=(0, 1))
+        """Создает заголовки таблицы"""
+        for widget in self.header_frame.winfo_children():
+            widget.destroy()
 
         if not columns:
             return
 
-        col_width = self.default_column_width
+        # Рассчитываем ширину колонок
+        container_width = self.table_scrollable.winfo_width() - 20  # Отступ для скроллбара
+        if container_width < 100:
+            container_width = 1000  # Минимальная ширина
 
-        # Настраиваем колонки в гриде - НЕ растягиваем их
-        for i in range(len(columns)):
-            self.header_frame.grid_columnconfigure(i, weight=0, minsize=col_width)
+        col_width = container_width // len(columns)
 
         for i, col in enumerate(columns):
-            # Сохраняем ширину колонки
-            self.column_widths[col] = col_width
-
             # Создаем кнопку-заголовок для сортировки
             header_btn = ctk.CTkButton(
                 self.header_frame,
@@ -756,60 +814,42 @@ class EnhancedNissanGUI:
             )
             header_btn.grid(row=0, column=i, sticky="nsew", padx=(1, 0))
 
+            # Настраиваем вес колонки для растяжения
+            self.header_frame.grid_columnconfigure(i, weight=1)
+
     def create_table_rows(self, data):
-        """Создает строки таблицы с данными с горизонтальным скроллом"""
-        # Используем быстрый метод очистки
-        if hasattr(self, 'data_frame') and self.data_frame.winfo_exists():
-            for widget in self.data_frame.winfo_children():
-                widget.destroy()
-        else:
-            self.data_frame = ctk.CTkFrame(self.table_content_frame, fg_color="transparent")
-            self.data_frame.pack(fill="both", expand=True)
+        """Создает строки таблицы с данными"""
+        # Очищаем предыдущие данные
+        for widget in self.data_frame.winfo_children():
+            widget.destroy()
 
         if not data:
-            # Создаем сообщение "Нет данных"
-            no_data_label = ctk.CTkLabel(
-                self.data_frame,
-                text="Нет данных для отображения",
-                font=ctk.CTkFont(size=16, weight="bold"),
-                fg_color="transparent"
-            )
-            no_data_label.pack(expand=True, pady=50)
             return
 
-        # Определяем реальные колонки из данных
-        if data:
-            first_record = data[0]
-            self.display_columns = list(first_record.keys())
-        else:
-            self.display_columns = []
+        columns = list(data[0].keys()) if data else []
 
-        col_count = len(self.display_columns)
-        col_width = self.default_column_width
+        # Рассчитываем ширину колонок
+        container_width = self.table_scrollable.winfo_width() - 20
+        if container_width < 100:
+            container_width = 1000
 
-        # Настраиваем колонки в гриде - НЕ растягиваем их
-        for i in range(col_count):
-            self.data_frame.grid_columnconfigure(i, weight=0, minsize=col_width)
+        col_width = container_width // len(columns)
 
         # Создаем строки с данными
         for row_idx, row_data in enumerate(data):
+            row_frame = ctk.CTkFrame(self.data_frame, fg_color="transparent", height=35)
+            row_frame.pack(fill="x", pady=(0, 1))
+
             # Чередование цветов строк
             bg_color = "#2b2b2b" if row_idx % 2 == 0 else "#3a3a3a"
 
-            row_frame = ctk.CTkFrame(self.data_frame, fg_color=bg_color, height=35)
-            row_frame.grid(row=row_idx, column=0, sticky="ew", pady=(0, 1))
-
-            # Настраиваем колонки в строке
-            for col_idx in range(col_count):
-                row_frame.grid_columnconfigure(col_idx, weight=0, minsize=col_width)
-
-            for col_idx, col in enumerate(self.display_columns):
+            for col_idx, col in enumerate(columns):
                 value = row_data.get(col, "")
 
                 # Форматируем значение
-                formatted_value = self.fast_format_value(value)
+                formatted_value = self.safe_format_value(value)
 
-                # Создаем ячейку с полосой прокрутки по необходимости
+                # Создаем ячейку
                 cell = ctk.CTkLabel(
                     row_frame,
                     text=formatted_value,
@@ -818,56 +858,12 @@ class EnhancedNissanGUI:
                     height=35,
                     width=col_width,
                     anchor="w",
-                    justify="left",
-                    wraplength=col_width - 10  # Перенос текста
+                    justify="left"
                 )
                 cell.grid(row=0, column=col_idx, sticky="nsew", padx=(1, 0))
 
-        # Обновляем ширину контейнера для горизонтального скролла
-        self.update_table_width()
-
-    def update_table_width(self):
-        """Обновляет ширину контейнера таблицы для включения горизонтального скролла"""
-        if not self.display_columns:
-            return
-
-        # Рассчитываем общую ширину всех колонок
-        total_width = len(self.display_columns) * self.default_column_width
-
-        # Устанавливаем минимальную ширину для контейнера
-        min_width = max(800, total_width)  # Минимум 800px или общая ширина колонок
-
-        # Настраиваем ширину контейнеров
-        self.table_content_frame.configure(width=min_width)
-        self.header_frame.configure(width=min_width)
-        self.data_frame.configure(width=min_width)
-
-        # Обновляем отображение
-        self.table_content_frame.update_idletasks()
-
-    def fast_format_value(self, value):
-        """Быстрое форматирование значения (оптимизированная версия)"""
-        if value is None:
-            return "[ПУСТО]"
-
-        if isinstance(value, float):
-            if math.isnan(value):
-                return "[ПУСТО]"
-            # Форматируем только если нужно
-            if abs(value) > 1000 or (0 < abs(value) < 0.01):
-                return f"{value:.2f}"
-            return str(value)
-
-        if isinstance(value, (int, numbers.Integral)):
-            return str(value)
-
-        if isinstance(value, list):
-            return f"[{len(value)}]"
-
-        if isinstance(value, dict):
-            return "{...}"
-
-        return str(value)
+                # Настраиваем вес колонки
+                row_frame.grid_columnconfigure(col_idx, weight=1)
 
     def on_header_click(self, column):
         """Обработка клика на заголовок таблицы с защитой от двойного клика"""
@@ -990,25 +986,22 @@ class EnhancedNissanGUI:
             messagebox.showwarning("Предупреждение", "Введите корректный номер страницы")
 
     def create_aggregation_panel(self, parent):
-        """Создает панель агрегации с подложкой"""
-        # Контейнер для агрегации с подложкой
-        agg_main_container = ctk.CTkFrame(
+        """Создает панель агрегации под таблицей"""
+        agg_container = ctk.CTkFrame(
             parent,
             corner_radius=12,
-            fg_color=("#f0f0f0", "#2a2a2a"),
-            border_width=1,
-            border_color=("#d0d0d0", "#404040")
+            fg_color="transparent"
         )
-        agg_main_container.pack(side="bottom", fill="x", padx=5, pady=5)
+        agg_container.pack(side="bottom", fill="x", padx=5, pady=5)
 
-        agg_header = ctk.CTkFrame(agg_main_container, fg_color="transparent")
+        agg_header = ctk.CTkFrame(agg_container, fg_color="transparent")
         agg_header.pack(fill="x", padx=10, pady=5)
 
         ctk.CTkLabel(agg_header, text="📊 Агрегация данных",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
 
-        # Главный контейнер для элементов управления агрегацией
-        agg_main_controls = ctk.CTkFrame(agg_main_container, fg_color="transparent")
+        # Главный контейнер для элементов управления агрегацией (все в одной строке)
+        agg_main_controls = ctk.CTkFrame(agg_container, fg_color="transparent")
         agg_main_controls.pack(fill="x", padx=10, pady=(0, 10))
 
         # Все элементы в одной строке
@@ -1066,36 +1059,43 @@ class EnhancedNissanGUI:
         ctk.CTkButton(button_frame, text="Сбросить агрегацию", width=160, height=32,
                       command=self.reset_aggregation).pack(side="left", padx=5)
 
-    def detect_schema(self):
-        """Оптимизированное определение схемы"""
+    def safe_format_value(self, value):
+        """Безопасное форматирование значения с обработкой различных типов данных"""
         try:
-            sample = self.collection.find_one()
-            if sample:
-                self.all_columns = [col for col in sample.keys() if col != '_id']
+            if value is None:
+                return "[ПУСТО]"
 
-                # Оптимизация: ограничиваем количество записей для анализа
-                cursor = self.collection.find({}, {'_id': 0}).limit(500)
-                records = list(cursor)
+            # Проверяем на NaN (не число)
+            if isinstance(value, float):
+                if math.isnan(value):
+                    return "[ПУСТО]"
+                # Форматируем с 2 знаками после запятой
+                return f"{value:.2f}"
 
-                if records:
-                    df_sample = pd.DataFrame(records)
-                    for col in self.all_columns:
-                        if col in df_sample.columns:
-                            dtype = str(df_sample[col].dtype)
-                            self.column_types[col] = dtype
+            # Проверяем на другие числовые типы
+            if isinstance(value, (int, numbers.Integral)):
+                return str(value)
 
-                            if df_sample[col].nunique() < 50:  # Уменьшили порог
-                                unique_vals = df_sample[col].dropna().unique().tolist()
-                                unique_vals_str = [str(val) for val in unique_vals]
-                                self.unique_values_cache[col] = sorted(unique_vals_str)[:30]  # Уменьшили количество
+            # Для списков показываем количество элементов
+            if isinstance(value, list):
+                return f"[{len(value)} значений]"
 
-                # Обновляем комбобоксы
-                if self.all_columns:
-                    self.group_by_combo.configure(values=self.all_columns)
-                    self.agg_col_combo.configure(values=self.all_columns)
+            # Для словарей преобразуем в строку
+            if isinstance(value, dict):
+                return "{...}"
+
+            # Для остальных типов просто преобразуем в строку
+            return str(value)
 
         except Exception as e:
-            print(f"Ошибка определения схемы: {e}")
+            print(f"Ошибка форматирования значения {value}: {e}")
+            return "[ОШИБКА]"
+
+    def load_initial_data(self):
+        self.detect_schema()
+        # При запуске сразу показываем все фильтры по всем столбцам
+        self.root.after(100, self.create_all_filters)
+        self.load_data()
 
     def create_all_filters(self):
         """Создает фильтры для всех столбцов при запуске"""
@@ -1109,19 +1109,46 @@ class EnhancedNissanGUI:
             self.filter_conditions.clear()
             self.filter_widgets.clear()
 
-        # Создаем фильтры для всех столбцов (но ограничиваем количество для производительности)
-        max_filters = min(20, len(self.all_columns))  # Максимум 20 фильтров
-        for i in range(max_filters):
-            col = self.all_columns[i]
+        # Создаем фильтры для всех столбцов
+        for i, col in enumerate(self.all_columns):
             self.create_filter_for_column(col, i)
 
         # Обновляем данные после создания всех фильтров
         self.load_data()
 
+    def detect_schema(self):
+        try:
+            sample = self.collection.find_one()
+            if sample:
+                self.all_columns = [col for col in sample.keys() if col != '_id']
+
+                cursor = self.collection.find({}, {'_id': 0}).limit(1000)
+                records = list(cursor)
+
+                if records:
+                    df_sample = pd.DataFrame(records)
+                    for col in self.all_columns:
+                        if col in df_sample.columns:
+                            dtype = str(df_sample[col].dtype)
+                            self.column_types[col] = dtype
+
+                            if df_sample[col].nunique() < 100:
+                                unique_vals = df_sample[col].dropna().unique().tolist()
+                                unique_vals_str = [str(val) for val in unique_vals]
+                                self.unique_values_cache[col] = sorted(unique_vals_str)[:50]
+
+                # Обновляем комбобоксы
+                if self.all_columns:
+                    self.group_by_combo.configure(values=self.all_columns)
+                    self.agg_col_combo.configure(values=self.all_columns)
+
+        except Exception as e:
+            print(f"Ошибка определения схемы: {e}")
+
     def apply_aggregation(self):
         group_by = self.group_by_var.get()
         agg_func = self.agg_func_var.get()
-        agg_col = self.agg_col_combo.get()
+        agg_col = self.agg_col_var.get()
 
         if not group_by or not agg_func:
             messagebox.showwarning("Предупреждение",
@@ -1144,7 +1171,7 @@ class EnhancedNissanGUI:
                 "генерируемая дисперсия": "$stdDevSamp"
             }.get(agg_func, "$sum")
 
-            # Строим пайплайн агрегации
+            # Строим пайплайн агрегации с обработкой nan значений как пустых
             pipeline = []
 
             # Добавляем стадию матча из текущих фильтров
@@ -1152,14 +1179,75 @@ class EnhancedNissanGUI:
             if match_stage:
                 pipeline.append({"$match": match_stage})
 
-            # Стадия группировки
+            # Стадия группировки с обработкой nan значений
             group_stage = {"_id": f"${group_by}"}
 
             if mongo_func == "$count":
                 group_stage["count"] = {"$sum": 1}
             elif agg_col:
-                group_stage["result"] = {mongo_func: f"${agg_col}"}
+                # Обработка для агрегационных функций с фильтрацией nan
+                if mongo_func in ["$sum", "$avg"]:
+                    group_stage["result"] = {
+                        mongo_func: {
+                            "$cond": {
+                                "if": {"$and": [
+                                    {"$ne": [f"${agg_col}", None]},
+                                    {"$ne": [{"$type": f"${agg_col}"}, "null"]},
+                                    {"$in": [{"$type": f"${agg_col}"}, ["double", "int", "long", "decimal"]]},
+                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
+                                ]},
+                                "then": f"${agg_col}",
+                                "else": 0
+                            }
+                        }
+                    }
+                elif mongo_func in ["$min", "$max", "$first", "$last"]:
+                    # Для min/max/first/last фильтруем nan значения
+                    group_stage["result"] = {
+                        mongo_func: {
+                            "$cond": {
+                                "if": {"$and": [
+                                    {"$ne": [f"${agg_col}", None]},
+                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
+                                ]},
+                                "then": f"${agg_col}",
+                                "else": "$$REMOVE"
+                            }
+                        }
+                    }
+                elif mongo_func in ["$push", "$addToSet"]:
+                    # Для push и addToSet фильтруем пустые и nan значения
+                    group_stage["result"] = {
+                        mongo_func: {
+                            "$cond": {
+                                "if": {"$and": [
+                                    {"$ne": [f"${agg_col}", None]},
+                                    {"$ne": [f"${agg_col}", ""]},
+                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
+                                ]},
+                                "then": f"${agg_col}",
+                                "else": "$$REMOVE"
+                            }
+                        }
+                    }
+                elif mongo_func in ["$stdDevPop", "$stdDevSamp"]:
+                    # Для стандартного отклонения фильтруем числовые значения и nan
+                    group_stage["result"] = {
+                        mongo_func: {
+                            "$cond": {
+                                "if": {"$and": [
+                                    {"$ne": [f"${agg_col}", None]},
+                                    {"$ne": [{"$type": f"${agg_col}"}, "null"]},
+                                    {"$in": [{"$type": f"${agg_col}"}, ["double", "int", "long", "decimal"]]},
+                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
+                                ]},
+                                "then": f"${agg_col}",
+                                "else": None
+                            }
+                        }
+                    }
             else:
+                # Если колонка не выбрана, но функция требует ее
                 if mongo_func not in ["$count"]:
                     messagebox.showwarning("Предупреждение",
                                            "Выберите колонку для агрегации")
@@ -1167,29 +1255,34 @@ class EnhancedNissanGUI:
 
             pipeline.append({"$group": group_stage})
 
-            # Сортировка
+            # Фильтруем группы с пустыми результатами
+            if mongo_func not in ["$count"] and agg_col:
+                pipeline.append({"$match": {"result": {"$ne": None}}})
+
+            # Сортировка по результату агрегации
             sort_direction = self.sort_direction if self.sort_column else 1
             if self.sort_column:
+                # Определяем поле для сортировки
                 sort_field = self.sort_column
+                # Если сортируем по результату агрегации
                 if self.sort_column != group_by:
                     sort_field = "result"
                 pipeline.append({"$sort": {sort_field: sort_direction}})
             else:
                 pipeline.append({"$sort": {"_id": 1}})
 
-            # Ограничиваем количество результатов для быстродействия
-            pipeline.append({"$limit": 1000})
+            # Выполняем агрегацию с обработкой ошибок
+            try:
+                result = list(self.collection.aggregate(pipeline, allowDiskUse=True))
+            except Exception as agg_error:
+                # Если агрегация не удалась, пытаемся более простым способом
+                print(f"Ошибка агрегации: {agg_error}")
+                messagebox.showwarning("Предупреждение",
+                                       f"Ошибка агрегации: {str(agg_error)}\nПопробуйте другие параметры.")
+                return
 
-            # Выполняем агрегацию в отдельном потоке
-            def run_aggregation():
-                try:
-                    result = list(self.collection.aggregate(pipeline, allowDiskUse=True))
-                    self.root.after(0, lambda: self.display_aggregation_results(result, group_by, agg_func, agg_col))
-                except Exception as agg_error:
-                    self.root.after(0, lambda: messagebox.showwarning("Предупреждение",
-                                                                      f"Ошибка агрегации: {str(agg_error)}"))
-
-            threading.Thread(target=run_aggregation, daemon=True).start()
+            # Обновляем таблицу с результатами
+            self.display_aggregation_results(result, group_by, agg_func, agg_col)
 
             self.aggregation_mode = True
             self.group_by_column = group_by
@@ -1198,13 +1291,11 @@ class EnhancedNissanGUI:
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка агрегации: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def display_aggregation_results(self, results, group_by, agg_func, agg_col):
-        """Отображение результатов агрегации"""
-        if not results:
-            messagebox.showinfo("Информация", "Нет данных для отображения")
-            return
-
+        """Отображение результатов агрегации с использованием CTk виджетов"""
         # Создаем данные для отображения в таблице
         table_data = []
 
@@ -1215,6 +1306,7 @@ class EnhancedNissanGUI:
             if agg_func == "количество" or "count" in record:
                 row_data["Количество"] = record.get("count", 0)
             elif agg_col:
+                # Красивое отображение функции
                 func_display = {
                     "сумма": "Сумма",
                     "среднее": "Среднее",
@@ -1269,126 +1361,66 @@ class EnhancedNissanGUI:
         self.load_data()
 
     def load_data(self):
-        """Оптимизированная загрузка данных"""
-        if self.loading_in_progress:
-            return
+        try:
+            if self.aggregation_mode:
+                # Если в режиме агрегации, не обновляем обычные данные
+                return
 
-        self.loading_in_progress = True
+            query = self.build_query()
+            self.total_records = self.collection.count_documents(query)
 
-        # Показываем индикатор загрузки
-        self.records_count_label.configure(text="Загрузка...")
+            total_all = self.collection.count_documents({})
+            self.records_count_label.configure(
+                text=f"Найдено: {self.total_records:,} из {total_all:,} записей"
+            )
 
-        # Запускаем в отдельном потоке
-        def load_data_thread():
-            try:
-                query = self.build_query()
+            self.load_page_data()
+            self.update_info()
 
-                # Проверяем, изменился ли запрос
-                query_key = str(query)
-
-                # Если запрос тот же и у нас есть кэшированное количество записей
-                if query_key == self.current_query and 'count' in self.data_cache:
-                    self.total_records = self.data_cache['count']
-                else:
-                    # Считаем только если запрос изменился
-                    self.total_records = self.collection.count_documents(query)
-                    self.current_query = query_key
-                    self.data_cache['count'] = self.total_records
-
-                total_all = self.collection.count_documents({})
-
-                # Обновляем UI в основном потоке
-                self.root.after(0, lambda: self.records_count_label.configure(
-                    text=f"Найдено: {self.total_records:,} из {total_all:,} записей"
-                ))
-
-                self.root.after(0, self.load_page_data)
-                self.root.after(0, self.update_info)
-
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Ошибка загрузки данных: {str(e)}"))
-            finally:
-                self.loading_in_progress = False
-
-        threading.Thread(target=load_data_thread, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка загрузки данных: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def load_page_data(self):
-        """Оптимизированная загрузка страницы данных"""
         skip = self.current_page * self.page_size
         query = self.build_query()
 
-        # Ключ для кэширования
-        cache_key = f"{str(query)}_{skip}_{self.page_size}_{self.sort_column}_{self.sort_direction}"
+        try:
+            sort_spec = []
+            if self.sort_column:
+                sort_spec = [(self.sort_column, self.sort_direction)]
 
-        # Проверяем кэш
-        if cache_key in self.data_cache:
-            data = self.data_cache[cache_key]
-            self.display_data(data)
-            return
+            cursor = self.collection.find(query, {'_id': 0})
 
-        # Загружаем данные в отдельном потоке
-        def load_page_thread():
-            try:
-                sort_spec = []
-                if self.sort_column:
-                    sort_spec = [(self.sort_column, self.sort_direction)]
+            if sort_spec:
+                cursor = cursor.sort(sort_spec)
 
-                cursor = self.collection.find(query, {'_id': 0})
+            cursor = cursor.skip(skip).limit(self.page_size)
 
-                if sort_spec:
-                    cursor = cursor.sort(sort_spec)
+            # Преобразуем данные в формат для отображения
+            data = []
+            for record in cursor:
+                row_data = {}
+                for col in self.all_columns:
+                    val = record.get(col, '')
+                    # Обработка nan значений
+                    if isinstance(val, float) and math.isnan(val):
+                        val = None
+                    row_data[col] = val
+                data.append(row_data)
 
-                cursor = cursor.skip(skip).limit(self.page_size)
+            # Создаем заголовки таблицы
+            self.create_table_headers(self.all_columns)
 
-                # Быстрое преобразование данных
-                data = []
-                for record in cursor:
-                    row_data = {}
-                    for col in self.all_columns:
-                        val = record.get(col, '')
-                        # Минимальная обработка для скорости
-                        if isinstance(val, float) and math.isnan(val):
-                            val = None
-                        row_data[col] = val
-                    data.append(row_data)
+            # Создаем строки с данными
+            self.create_table_rows(data)
 
-                # Сохраняем в кэш
-                self.data_cache[cache_key] = data
-
-                # Отображаем в основном потоке
-                self.root.after(0, lambda: self.display_data(data))
-
-            except Exception as e:
-                self.root.after(0, lambda: print(f"Ошибка загрузки данных: {e}"))
-
-        threading.Thread(target=load_page_thread, daemon=True).start()
-
-    def display_data(self, data):
-        """Быстрое отображение данных"""
-        if not data:
-            # Если данных нет, создаем заголовки для пустой таблицы
-            self.create_table_headers([])
+        except Exception as e:
+            print(f"Ошибка загрузки данных: {e}")
+            # Создаем пустую таблицу в случае ошибки
+            self.create_table_headers(self.all_columns if self.all_columns else [])
             self.create_table_rows([])
-            return
-
-        # Определяем колонки для отображения из данных (только те, которые есть в данных)
-        if data:
-            # Определяем реальные колонки из всех данных
-            all_keys = set()
-            for record in data:
-                all_keys.update(record.keys())
-
-            # Сортируем колонки для консистентности
-            self.display_columns = sorted(list(all_keys))
-        else:
-            self.display_columns = []
-
-        # Создаем заголовки таблицы (только если нужно)
-        if not hasattr(self, 'header_frame') or not self.header_frame.winfo_exists():
-            self.create_table_headers(self.display_columns)
-
-        # Создаем строки с данными
-        self.create_table_rows(data)
 
     def update_info(self):
         if self.aggregation_mode:
@@ -1408,8 +1440,6 @@ class EnhancedNissanGUI:
         try:
             self.page_size = int(value)
             self.current_page = 0
-            # Очищаем кэш при изменении размера страницы
-            self.data_cache.clear()
             self.load_data()
         except:
             pass
@@ -1418,21 +1448,18 @@ class EnhancedNissanGUI:
         total_pages = max(1, (self.total_records + self.page_size - 1) // self.page_size)
         if 0 <= page_num < total_pages:
             self.current_page = page_num
-            self.load_page_data()
-            self.update_info()
+            self.load_data()
 
     def prev_page(self):
         if self.current_page > 0:
             self.current_page -= 1
-            self.load_page_data()
-            self.update_info()
+            self.load_data()
 
     def next_page(self):
         total_pages = max(1, (self.total_records + self.page_size - 1) // self.page_size)
         if self.current_page < total_pages - 1:
             self.current_page += 1
-            self.load_page_data()
-            self.update_info()
+            self.load_data()
 
     def last_page(self):
         total_pages = max(1, (self.total_records + self.page_size - 1) // self.page_size)
@@ -1440,8 +1467,6 @@ class EnhancedNissanGUI:
 
     def apply_search(self):
         self.current_page = 0
-        # Очищаем кэш при новом поиске
-        self.data_cache.clear()
         self.load_data()
 
     def apply_sort(self, column, direction):
@@ -1451,12 +1476,10 @@ class EnhancedNissanGUI:
             self.sort_column = column
             self.sort_direction = 1
 
-        # Очищаем кэш сортировки
-        self.data_cache = {k: v for k, v in self.data_cache.items() if '_' not in k or k.split('_')[-2] != 'sort'}
-        self.load_page_data()
+        self.load_data()
 
     def clear_all_filters(self):
-        # Очищаем все условия во всех фильтрах
+        # Очищаем все условия во всех фильтрах (оставляем только по одному пустому условию)
         for condition in self.filter_conditions:
             widgets = condition['widgets']
 
@@ -1479,9 +1502,103 @@ class EnhancedNissanGUI:
         self.sort_column = None
         self.sort_direction = 1
         self.current_page = 0
-        # Очищаем кэш
-        self.data_cache.clear()
         self.load_data()
+
+    def show_statistics(self):
+        try:
+            query = self.build_query()
+            cursor = self.collection.find(query, {'_id': 0})
+            data = list(cursor)
+
+            if not data:
+                messagebox.showinfo("Статистика", "Нет данных для отображения статистики")
+                return
+
+            df = pd.DataFrame(data)
+
+            stats_window = ctk.CTkToplevel(self.root)
+            stats_window.title("Расширенная статистика")
+            stats_window.geometry("1000x700")
+
+            # Используем CTkTabview вместо ttk.Notebook
+            notebook = ctk.CTkTabview(stats_window)
+            notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+            # Общая статистика
+            general_tab = notebook.add("Общая")
+
+            text_widget = ctk.CTkTextbox(general_tab, wrap="word")
+            text_widget.pack(fill="both", expand=True, padx=10, pady=10)
+
+            total_all = self.collection.count_documents({})
+
+            stats_text = "СТАТИСТИКА ДАННЫХ NISSAN\n"
+            stats_text += "=" * 60 + "\n\n"
+            stats_text += f"Всего записей в фильтре: {len(df):,}\n"
+            stats_text += f"Всего записей в базе: {total_all:,}\n"
+            stats_text += f"Процент отображения: {(len(df) / total_all * 100):.1f}%\n\n"
+
+            # Статистика по типам данных
+            stats_text += "ТИПЫ ДАННЫХ:\n"
+            for col in df.columns:
+                dtype = str(df[col].dtype)
+                stats_text += f"  {col}: {dtype}\n"
+            stats_text += "\n"
+
+            stats_text += "=" * 60 + "\n\n"
+
+            # Детальная статистика по столбцам
+            for col in df.columns:
+                # Подсчет непустых значений (исключая nan)
+                non_null = df[col].notna().sum()
+                # Дополнительная проверка на nan для числовых колонок
+                if df[col].dtype in ['float64']:
+                    non_null = df[col].apply(lambda x: not (isinstance(x, float) and math.isnan(x))).sum()
+
+                null_count = len(df) - non_null
+                unique = df[col].nunique()
+                stats_text += f"{col}:\n"
+                stats_text += f"  Непустых значений: {non_null:,}\n"
+                stats_text += f"  Пустых значений (включая nan): {null_count:,}\n"
+                stats_text += f"  Уникальных значений: {unique:,}\n"
+                if non_null > 0:
+                    stats_text += f"  Заполненность: {(non_null / len(df) * 100):.1f}%\n"
+
+                if df[col].dtype in ['int64', 'float64']:
+                    # Исключаем nan из статистики
+                    numeric_values = df[col].dropna()
+                    if not numeric_values.empty:
+                        stats_text += f"  Минимум: {numeric_values.min():.2f}\n"
+                        stats_text += f"  Максимум: {numeric_values.max():.2f}\n"
+                        stats_text += f"  Среднее: {numeric_values.mean():.2f}\n"
+                        stats_text += f"  Медиана: {numeric_values.median():.2f}\n"
+                        stats_text += f"  Стандартное отклонение: {numeric_values.std():.2f}\n"
+                        stats_text += f"  Дисперсия: {numeric_values.var():.2f}\n"
+
+                stats_text += "\n"
+
+            text_widget.insert("1.0", stats_text)
+            text_widget.configure(state="disabled")
+
+            # Статистика корреляции
+            numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+            if len(numeric_cols) > 1:
+                corr_tab = notebook.add("Корреляции")
+
+                corr_text = ctk.CTkTextbox(corr_tab, wrap="word")
+                corr_text.pack(fill="both", expand=True, padx=10, pady=10)
+
+                # Исключаем строки с nan для корреляции
+                numeric_df = df[numeric_cols].dropna()
+                corr_matrix = numeric_df.corr()
+
+                corr_text.insert("1.0", "КОРРЕЛЯЦИОННАЯ МАТРИЦА:\n")
+                corr_text.insert("2.0", "=" * 50 + "\n\n")
+                corr_text.insert("3.0", str(corr_matrix))
+                corr_text.configure(state="disabled")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка расчета статистики: {str(e)}")
 
     def run(self):
         self.root.mainloop()
