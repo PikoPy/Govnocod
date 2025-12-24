@@ -1,12 +1,12 @@
 import customtkinter as ctk
-from tkinter import messagebox, StringVar, BooleanVar
+from tkinter import ttk, messagebox
 from pymongo import MongoClient
 import pandas as pd
 from datetime import datetime
 from collections import defaultdict
-import json
 import math
 import numbers
+import re
 
 
 class EnhancedNissanGUI:
@@ -25,8 +25,11 @@ class EnhancedNissanGUI:
         self.current_page = 0
         self.page_size = 100
         self.total_records = 0
+        self.filtered_records = 0
         self.all_columns = []
         self.column_types = {}
+        self.column_stats = {}  # Хранит статистику по колонкам для всех данных
+        self.filtered_column_stats = {}  # Хранит статистику по колонкам для отфильтрованных данных
         self.unique_values_cache = defaultdict(list)
 
         self.filters = {}
@@ -48,13 +51,18 @@ class EnhancedNissanGUI:
         self.last_click_time = 0
         self.last_click_column = None
 
+        # Фиксированные ширины для столбцов
+        self.column_widths = {}
+
+        # Для хранения ссылок на заголовки фильтров
+        self.filter_header_labels = {}
+
         self.setup_ui()
 
     def setup_ui(self):
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.create_top_panel(main_container)
         self.create_filters_panel(main_container)
 
         # Создаем контейнер для таблицы и панели агрегации
@@ -78,7 +86,7 @@ class EnhancedNissanGUI:
 
         # Создаем панель таблицы
         self.create_table_panel(table_pagination_container)
-
+        self.configure_treeview_style()
         # Создаем панель пагинации под таблицей
         self.create_pagination_panel(table_pagination_container)
 
@@ -87,20 +95,73 @@ class EnhancedNissanGUI:
 
         self.load_initial_data()
 
-    def create_top_panel(self, parent):
-        top_frame = ctk.CTkFrame(parent, height=60)
-        top_frame.pack(fill="x", padx=0, pady=(0, 5))
+    def configure_treeview_style(self):
+        """Настраивает стиль для Treeview с четкими границами ячеек"""
+        style = ttk.Style()
+        style.theme_use("clam")
 
-        title_label = ctk.CTkLabel(top_frame,
-                                   text="🚗 Nissan Vehicles Database",
-                                   font=ctk.CTkFont(size=24, weight="bold"))
-        title_label.pack(side="left", padx=20)
+        # Настройки для темной темы
+        bg_color = "#2b2b2b"  # Цвет фона ячеек
+        fg_color = "white"  # Цвет текста
+        heading_bg = "#3a3a3a"  # Цвет заголовков
+        border_color = "#555555"  # Цвет границ
+        selected_bg = "#4a7aba"  # Цвет выделения
 
-        button_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
-        button_frame.pack(side="right", padx=20)
+        # Основной стиль Treeview
+        style.configure("Treeview",
+                        background=bg_color,
+                        foreground=fg_color,
+                        fieldbackground=bg_color,
+                        borderwidth=1,
+                        relief="solid",  # Добавляем рельеф для границ
+                        font=('TkDefaultFont', 10),
+                        rowheight=25)
 
-        ctk.CTkButton(button_frame, text="Статистика",
-                      width=100, command=self.show_statistics).pack(side="left", padx=5)
+        # Стиль заголовков
+        style.configure("Treeview.Heading",
+                        background=heading_bg,
+                        foreground=fg_color,
+                        relief="raised",  # Выпуклые заголовки
+                        borderwidth=2,
+                        font=('TkDefaultFont', 10, 'bold'),
+                        padding=(5, 5, 5, 22))
+
+        # Настраиваем цвета для выделения
+        style.map('Treeview',
+                  background=[('selected', selected_bg)],
+                  foreground=[('selected', 'white')])
+
+        # Настраиваем цвета для заголовков при наведении
+        style.map("Treeview.Heading",
+                  background=[('active', '#4a4a4a')],
+                  relief=[('pressed', 'sunken')])
+
+        # Переопределяем layout для ячеек с явными границами
+        style.layout("Treeview.Item", [
+            ('Treeitem.padding', {
+                'sticky': 'nswe',
+                'children': [
+                    ('Treeitem.indicator', {'side': 'left', 'sticky': ''}),
+                    ('Treeitem.image', {'side': 'left', 'sticky': ''}),
+                    ('Treeitem.text', {'side': 'left', 'sticky': 'we'})
+                ]
+            })
+        ])
+
+        # Настройка скроллбаров
+        style.configure("Vertical.TScrollbar",
+                        background=heading_bg,
+                        troughcolor=bg_color,
+                        bordercolor=border_color,
+                        arrowcolor=fg_color,
+                        borderwidth=1)
+
+        style.configure("Horizontal.TScrollbar",
+                        background=heading_bg,
+                        troughcolor=bg_color,
+                        bordercolor=border_color,
+                        arrowcolor=fg_color,
+                        borderwidth=1)
 
     def create_filters_panel(self, parent):
         filters_container = ctk.CTkFrame(parent)
@@ -151,12 +212,23 @@ class EnhancedNissanGUI:
         )
         condition_frame.pack(fill="x", padx=5, pady=5, ipadx=5, ipady=5)
 
-        # Заголовок с номером условия
+        # Заголовок с номером условия и статистикой
         header_frame = ctk.CTkFrame(condition_frame, fg_color="transparent")
         header_frame.pack(fill="x", pady=(5, 10), padx=10)
 
-        ctk.CTkLabel(header_frame, text=f"Фильтр #{filter_id + 1}: {col_name}",
-                     font=ctk.CTkFont(weight="bold", size=14)).pack(side="left")
+        # Добавляем статистику по колонке (непустые/всего) - для всех данных
+        stats_text = ""
+        if col_name in self.column_stats:
+            stats = self.column_stats[col_name]
+            stats_text = f" ({stats['non_empty']:,}/{stats['total']:,})"
+
+        header_label = ctk.CTkLabel(header_frame,
+                                    text=f"Фильтр #{filter_id + 1}: {col_name}{stats_text}",
+                                    font=ctk.CTkFont(weight="bold", size=14))
+        header_label.pack(side="left")
+
+        # Сохраняем ссылку на заголовок для обновления статистики
+        self.filter_header_labels[col_name] = header_label
 
         # Содержимое условия
         content_frame = ctk.CTkFrame(condition_frame, fg_color="transparent")
@@ -199,7 +271,9 @@ class EnhancedNissanGUI:
             'value_rows': value_rows,  # Список строк значений
             'values_rows_frame': values_rows_frame,
             'value_count': 1,  # Текущее количество строк значений
-            'is_preset': True  # Флаг, что это предустановленный фильтр
+            'is_preset': True,  # Флаг, что это предустановленный фильтр
+            'header_label': header_label,  # Сохраняем ссылку на заголовок
+            'col_name': col_name  # Сохраняем имя колонки
         }
 
         self.filter_conditions.append({
@@ -270,10 +344,6 @@ class EnhancedNissanGUI:
             'row_index': row_index,
             'remove_btn': remove_btn
         }
-
-    def on_column_change(self, filter_id):
-        """Обработка изменения колонки"""
-        self.apply_filter_condition(filter_id)
 
     def on_value_logic_change(self, filter_id, row_index):
         """Обработка изменения логического оператора для значения"""
@@ -382,7 +452,12 @@ class EnhancedNissanGUI:
                                 # Для стандартных фильтров показываем название колонки
                                 if widgets.get('is_preset', False):
                                     col_name = widgets['col_var'].get()
-                                    grandchild.configure(text=f"Фильтр #{i + 1}: {col_name}")
+                                    # Обновляем статистику
+                                    stats_text = ""
+                                    if col_name in self.column_stats:
+                                        stats = self.column_stats[col_name]
+                                        stats_text = f" ({stats['non_empty']:,}/{stats['total']:,})"
+                                    grandchild.configure(text=f"Фильтр #{i + 1}: {col_name}{stats_text}")
                                 else:
                                     grandchild.configure(text=f"Фильтр #{i + 1}")
                                 break
@@ -397,82 +472,61 @@ class EnhancedNissanGUI:
 
         self._filter_timer = self.root.after(500, self.load_data)
 
-    def update_filter_columns(self):
-        """Обновляет список колонок во всех фильтрах"""
-        if not self.all_columns:
-            return
-
-        for condition in self.filter_conditions:
-            widgets = condition['widgets']
-            if 'col_combo' in widgets:
-                current_value = widgets['col_var'].get()
-                widgets['col_combo'].configure(values=self.all_columns)
-                # Если текущее значение не в списке, устанавливаем первое значение
-                if current_value not in self.all_columns and self.all_columns:
-                    widgets['col_var'].set(self.all_columns[0])
-
     def build_query(self):
         """Строит MongoDB запрос из условий фильтрации"""
-        if not self.filter_conditions:
-            return {}
+        final_query = {}
 
-        filter_parts = []
+        # Сначала применяем условия фильтрации из фильтров-панелей
+        if self.filter_conditions:
+            filter_parts = []
 
-        for i, condition in enumerate(self.filter_conditions):
-            widgets = condition['widgets']
+            for i, condition in enumerate(self.filter_conditions):
+                widgets = condition['widgets']
 
-            col = widgets['col_var'].get()
+                col = widgets['col_var'].get()
 
-            # Получаем значения, операторы сравнения и логические операторы из всех строк
-            value_conditions = []
-            logic_operators = []
+                # Получаем значения, операторы сравнения и логические операторы из всех строк
+                value_conditions = []
+                logic_operators = []
 
-            for j, row in enumerate(widgets['value_rows']):
-                val = row['value_entry'].get().strip()
-                operator = row['operator_var'].get()
+                for j, row in enumerate(widgets['value_rows']):
+                    val = row['value_entry'].get().strip()
+                    operator = row['operator_var'].get()
 
-                if val:
-                    value_conditions.append({
-                        'value': val,
-                        'operator': operator
-                    })
+                    if val:
+                        value_conditions.append({
+                            'value': val,
+                            'operator': operator
+                        })
 
-                    # Для первой строки нет логического оператора
-                    if j > 0:
-                        logic = row['logic_var'].get() if row['logic_var'] else "И"
-                        logic_operators.append(logic)
+                        # Для первой строки нет логического оператора
+                        if j > 0:
+                            logic = row['logic_var'].get() if row['logic_var'] else "И"
+                            logic_operators.append(logic)
 
-            # Пропускаем пустые условия
-            if not col or not value_conditions:
-                continue
+                # Пропускаем пустые условия
+                if not col or not value_conditions:
+                    continue
 
-            # Строим условие с учетом логических операторов между значениями
-            condition_dict = self.build_value_conditions(col, value_conditions, logic_operators)
+                # Строим условие с учетом логических операторов между значениями
+                condition_dict = self.build_value_conditions(col, value_conditions, logic_operators)
 
-            if condition_dict:
-                filter_parts.append(condition_dict)
+                if condition_dict:
+                    filter_parts.append(condition_dict)
 
-        # Если нет условий, возвращаем пустой запрос
-        if not filter_parts:
-            return {}
+            # Если есть условия фильтрации, объединяем их через И
+            if filter_parts:
+                if len(filter_parts) == 1:
+                    final_query = filter_parts[0]
+                else:
+                    final_query = {"$and": filter_parts}
 
-        # Собираем итоговый запрос - ВСЕ фильтры объединяются через И
-        final_query = filter_parts[0]  # Начинаем с первого условия
-
-        for i in range(1, len(filter_parts)):
-            next_condition = filter_parts[i]
-            # Для И объединяем с $and
-            if "$and" not in final_query:
-                final_query = {"$and": [final_query, next_condition]}
-            else:
-                final_query["$and"].append(next_condition)
-
-        # Глобальный поиск
+        # Затем применяем глобальный поиск по всем полям
         search_value = self.search_entry.get().strip()
         if search_value:
-            # Используем более сложный поиск, как в фильтрах
             search_query = self.build_search_conditions(search_value)
             if search_query:
+                # Если уже есть условия фильтрации, объединяем с поиском через И
                 if final_query:
                     final_query = {"$and": [final_query, search_query]}
                 else:
@@ -481,80 +535,50 @@ class EnhancedNissanGUI:
         return final_query
 
     def build_search_conditions(self, search_value):
-        """Строит условия поиска по всем полям с разными операторами"""
+        """Строит условия поиска по всем полям"""
         if not search_value:
             return None
 
         try:
-            # Разделяем на возможные условия
-            conditions = []
+            # Создаем список условий для поиска по все полям
+            or_conditions = []
 
-            # Проверяем, содержит ли поисковый запрос операторы
-            operators = ["равно", "не равно", "больше", "больше или равно",
-                         "меньше", "меньше или равно", "в списке", "не в списке"]
+            # Пытаемся определить, является ли поисковое значение числом
+            is_numeric = False
+            numeric_value = None
 
-            operator_found = False
-            for operator in operators:
-                if f" {operator} " in search_value:
-                    operator_found = True
-                    break
+            try:
+                if '.' in search_value:
+                    numeric_value = float(search_value)
+                else:
+                    numeric_value = int(search_value)
+                is_numeric = True
+            except ValueError:
+                is_numeric = False
 
-            if operator_found:
-                # Обрабатываем как сложное условие
-                parts = search_value.split()
-                if len(parts) >= 3:
-                    col_name = parts[0]
-                    operator = parts[1]
-                    value = " ".join(parts[2:])
+            # Создаем условия для каждого поля
+            for col in self.all_columns:
+                # Для числовых значений пытаемся искать как число
+                if is_numeric:
+                    or_conditions.append({col: numeric_value})
 
-                    # Убираем кавычки если есть
-                    if (value.startswith('"') and value.endswith('"')) or \
-                            (value.startswith("'") and value.endswith("'")):
-                        value = value[1:-1]
+                # Всегда добавляем строковый поиск (регистронезависимый)
+                or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
 
-                    condition = self.build_single_condition(col_name, operator, value)
-                    if condition:
-                        return condition
+            # Если есть условия поиска, возвращаем их
+            if or_conditions:
+                return {"$or": or_conditions}
             else:
-                # Простой поиск по всем полям
-                or_conditions = []
-                for col in self.all_columns:
-                    try:
-                        # Пытаемся преобразовать в число для числовых сравнений
-                        if '.' in search_value:
-                            num_value = float(search_value)
-                            or_conditions.extend([
-                                {col: {"$eq": num_value}},
-                                {col: {"$gte": num_value - (num_value * 0.1)}},
-                                {col: {"$lte": num_value + (num_value * 0.1)}}
-                            ])
-                        else:
-                            try:
-                                num_value = int(search_value)
-                                or_conditions.extend([
-                                    {col: {"$eq": num_value}},
-                                    {col: {"$gte": num_value - 5}},
-                                    {col: {"$lte": num_value + 5}}
-                                ])
-                            except ValueError:
-                                # Строковый поиск
-                                or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
-                    except ValueError:
-                        # Строковый поиск
-                        or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
-
-                if or_conditions:
-                    return {"$or": or_conditions}
+                return None
 
         except Exception as e:
             print(f"Ошибка построения условий поиска: {e}")
+            # Возвращаем простой regex поиск по всем полям
+            or_conditions = []
+            for col in self.all_columns:
+                or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
 
-        # По умолчанию возвращаем простой regex поиск
-        or_conditions = []
-        for col in self.all_columns:
-            or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
-
-        return {"$or": or_conditions} if or_conditions else None
+            return {"$or": or_conditions} if or_conditions else None
 
     def build_value_conditions(self, col, value_conditions, logic_operators):
         """Строит условия для колонки с учетом операторов сравнения и логических операторов между значениями"""
@@ -595,7 +619,7 @@ class EnhancedNissanGUI:
                 elif logic == "ИЛИ":
                     combined_condition = {"$or": [combined_condition, conditions[i]]}
                 elif logic == "НЕ":
-                    # Для НЕ инвертируем условие
+                    # Для НЕ используем $not только для одного условия
                     combined_condition = {"$and": [combined_condition, {"$not": conditions[i]}]}
 
             return combined_condition
@@ -626,7 +650,7 @@ class EnhancedNissanGUI:
             if mongo_operator in ["$eq", "$ne", "$gt", "$gte", "$lt", "$lte"]:
                 # Обработка специальных значений
                 if value.lower() == "nan" or value == "" or value == "[ПУСТО]":
-                    # Для nan и пустых значений используем $or с проверкой на null и nan
+                    # Для nan и пустых значений
                     if operator == "равно":
                         return {"$or": [
                             {col: None},
@@ -634,10 +658,11 @@ class EnhancedNissanGUI:
                             {col: float('nan')}
                         ]}
                     elif operator == "не равно":
-                        return {"$and": [
-                            {col: {"$ne": None}},
-                            {col: {"$not": {"$type": "null"}}},
-                            {col: {"$ne": float('nan')}}
+                        # Исправляем: используем $nor вместо $and с $not
+                        return {"$nor": [
+                            {col: None},
+                            {col: {"$type": "null"}},
+                            {col: float('nan')}
                         ]}
                     else:
                         # Для других операторов с пустыми значениями возвращаем None
@@ -678,10 +703,11 @@ class EnhancedNissanGUI:
                                 {col: float('nan')}
                             ]}
                         else:  # $nin
-                            return {"$and": [
-                                {col: {"$ne": None}},
-                                {col: {"$not": {"$type": "null"}}},
-                                {col: {"$ne": float('nan')}}
+                            # Исправляем: используем $nor вместо $and с $not
+                            return {"$nor": [
+                                {col: None},
+                                {col: {"$type": "null"}},
+                                {col: float('nan')}
                             ]}
 
                     try:
@@ -731,7 +757,7 @@ class EnhancedNissanGUI:
         self.search_entry = ctk.CTkEntry(
             search_inner_frame,
             height=32,
-            placeholder_text="Введите поисковый запрос"
+            placeholder_text="Введите текст для поиска по всем полям"
         )
         self.search_entry.grid(row=0, column=2, sticky="ew", padx=(0, 8))
         self.search_entry.bind("<Return>", lambda e: self.apply_search())
@@ -752,121 +778,203 @@ class EnhancedNissanGUI:
         self.apply_search()
 
     def create_table_panel(self, parent):
+        """Создает панель таблицы с использованием ttk.Treeview для производительности"""
         # Основной контейнер таблицы
         self.table_container = ctk.CTkFrame(parent, fg_color="transparent")
         self.table_container.pack(fill="both", expand=True, pady=(0, 10))
 
-        # Создаем CTkScrollableFrame для таблицы
-        self.table_scrollable = ctk.CTkScrollableFrame(
-            self.table_container,
-            fg_color="transparent",
-            border_width=1,
-            border_color=("#c0c0c0", "#505050"),
-            scrollbar_button_color=("#c0c0c0", "#404040"),
-            scrollbar_button_hover_color=("#a0a0a0", "#505050")
+        # Контейнер для Treeview и скроллбаров
+        tree_container = ctk.CTkFrame(self.table_container, fg_color="transparent")
+        tree_container.pack(fill="both", expand=True)
+
+        # Создаем вертикальную прокрутку
+        v_scrollbar = ctk.CTkScrollbar(tree_container, orientation="vertical")
+        v_scrollbar.pack(side="right", fill="y")
+
+        # Создаем горизонтальную прокрутку
+        h_scrollbar = ctk.CTkScrollbar(tree_container, orientation="horizontal")
+        h_scrollbar.pack(side="bottom", fill="x")
+
+        # Создаем Treeview с расширенными параметрами для границ
+        self.tree = ttk.Treeview(
+            tree_container,
+            yscrollcommand=v_scrollbar.set,
+            xscrollcommand=h_scrollbar.set,
+            height=25,
+            selectmode="browse",
+            show="tree headings",  # Показываем заголовки
+            style="Treeview"  # Используем наш стиль
         )
-        self.table_scrollable.pack(fill="both", expand=True)
+        self.tree.pack(side="left", fill="both", expand=True)
 
-        # Создаем CTkTabview вместо Treeview
-        self.create_ctk_table()
+        # Настраиваем scrollbars
+        v_scrollbar.configure(command=self.tree.yview)
+        h_scrollbar.configure(command=self.tree.xview)
 
-    def create_ctk_table(self):
-        """Создает таблицу с использованием CTkFrame и CTkLabel"""
-        # Очищаем существующую таблицу
-        for widget in self.table_scrollable.winfo_children():
-            widget.destroy()
-
-        # Контейнер для заголовков
-        self.header_frame = ctk.CTkFrame(self.table_scrollable, fg_color="#3a3a3a", height=40)
-        self.header_frame.pack(fill="x", pady=(0, 1))
-
-        # Контейнер для данных (будет заполняться динамически)
-        self.data_frame = ctk.CTkFrame(self.table_scrollable, fg_color="transparent")
-        self.data_frame.pack(fill="both", expand=True)
+        # Привязываем события
+        self.tree.bind("<Button-1>", self.on_tree_click)
 
     def create_table_headers(self, columns):
-        """Создает заголовки таблицы"""
-        for widget in self.header_frame.winfo_children():
-            widget.destroy()
-
+        """Создает заголовки таблицы для Treeview с фиксированной шириной и многострочным текстом"""
         if not columns:
             return
 
-        # Рассчитываем ширину колонок
-        container_width = self.table_scrollable.winfo_width() - 20  # Отступ для скроллбара
-        if container_width < 100:
-            container_width = 1000  # Минимальная ширина
+        # Очищаем существующие колонки
+        for col in self.tree["columns"]:
+            self.tree.heading(col, text="")
+            self.tree.column(col, width=0)
 
-        col_width = container_width // len(columns)
+        # Устанавливаем новые колонки
+        self.tree["columns"] = columns
+        self.tree.heading("#0", text="", anchor="w")
+        self.tree.column("#0", width=0, stretch=False)
+
+        # Рассчитываем общую ширину всех столбцов
+        total_width = 0
 
         for i, col in enumerate(columns):
-            # Создаем кнопку-заголовок для сортировки
-            header_btn = ctk.CTkButton(
-                self.header_frame,
-                text=f"{col}↑↓",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                fg_color="#3a3a3a",
-                hover_color="#4a4a4a",
-                height=40,
-                width=col_width,
-                anchor="w",
-                command=lambda c=col: self.on_header_click(c)
-            )
-            header_btn.grid(row=0, column=i, sticky="nsew", padx=(1, 0))
+            # Создаем заголовок с символом сортировки
+            sort_symbol = ""
+            if self.sort_column == col:
+                sort_symbol = " ↑" if self.sort_direction == 1 else " ↓"
 
-            # Настраиваем вес колонки для растяжения
-            self.header_frame.grid_columnconfigure(i, weight=1)
+            # Добавляем статистику во вторую строку заголовка
+            stats_text = ""
+            if col in self.filtered_column_stats and not self.aggregation_mode:
+                stats = self.filtered_column_stats[col]
+                stats_text = f"\n({stats['non_empty']:,}/{stats['total']:,})"
+            elif col in self.column_stats:
+                stats = self.column_stats[col]
+                stats_text = f"\n({stats['non_empty']:,}/{stats['total']:,})"
+
+            # Создаем многострочный текст заголовка
+            header_text = f"{col}{sort_symbol}{stats_text}"
+
+            # Настраиваем колонку
+            self.tree.heading(col, text=header_text, anchor="center",
+                              command=lambda c=col: self.on_header_click(c))
+
+            # Устанавливаем ширину
+            if col in self.column_widths:
+                col_width = self.column_widths[col]
+            else:
+                # Определяем ширину на основе содержимого
+                col_width = self.calculate_column_width(col, header_text)
+                self.column_widths[col] = col_width
+
+            total_width += col_width
+
+            # Устанавливаем ширину с отступами
+            self.tree.column(col, width=col_width, minwidth=col_width,
+                             anchor="w", stretch=False)
+
+        # Настраиваем растягивание, чтобы столбцы заполняли всю ширину таблицы
+        self.configure_column_stretch(columns, total_width)
+
+    def calculate_column_width(self, col_name, header_text):
+        """Рассчитывает фиксированную ширину для колонки на основе содержимого заголовка"""
+        # Разделяем текст на строки
+        lines = header_text.split('\n')
+
+        # Находим максимальную длину строк
+        max_line_len = 0
+        for line in lines:
+            line_len = len(line)
+            if line_len > max_line_len:
+                max_line_len = line_len
+
+        # Рассчитываем ширину на основе максимальной длины строки
+        base_width = max_line_len * 7  # 7 пикселей на символ
+
+        # Минимальная и максимальная ширина
+        min_width = 120
+        max_width = 400
+
+        # Ограничиваем ширину
+        width = max(min_width, min(max_width, base_width + 20))
+
+        return width
+
+    def configure_column_stretch(self, columns, total_width):
+        """Настраивает растягивание столбцов для заполнения всей ширины таблицы"""
+        # Получаем ширину контейнера таблицы
+        container_width = self.table_container.winfo_width()
+
+        if container_width > 1 and total_width > 0:
+            # Рассчитываем коэффициент растяжения
+            stretch_factor = container_width / total_width
+
+            # Обновляем ширину каждого столбца
+            for i, col in enumerate(columns):
+                if col in self.column_widths:
+                    new_width = int(self.column_widths[col] * stretch_factor)
+                    # Ограничиваем минимальную ширину
+                    new_width = max(100, new_width)
+                    self.tree.column(col, width=new_width)
 
     def create_table_rows(self, data):
-        """Создает строки таблицы с данными"""
+        """Создает строки таблицы с данными в Treeview"""
         # Очищаем предыдущие данные
-        for widget in self.data_frame.winfo_children():
-            widget.destroy()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
 
         if not data:
+            # Создаем заголовки даже при отсутствии данных
+            if not self.aggregation_mode:
+                columns = self.all_columns
+            else:
+                columns = []
+
+            if columns:
+                self.create_table_headers(columns)
             return
 
-        columns = list(data[0].keys()) if data else []
+        # Определяем колонки для отображения
+        if self.aggregation_mode:
+            columns = list(data[0].keys()) if data else []
+        else:
+            columns = self.all_columns
 
-        # Рассчитываем ширину колонок
-        container_width = self.table_scrollable.winfo_width() - 20
-        if container_width < 100:
-            container_width = 1000
+        # Если колонки еще не установлены, устанавливаем их
+        if not self.tree["columns"] or len(self.tree["columns"]) != len(columns):
+            self.tree["columns"] = columns
+            self.create_table_headers(columns)
 
-        col_width = container_width // len(columns)
-
-        # Создаем строки с данными
+        # Добавляем данные в Treeview
         for row_idx, row_data in enumerate(data):
-            row_frame = ctk.CTkFrame(self.data_frame, fg_color="transparent", height=35)
-            row_frame.pack(fill="x", pady=(0, 1))
-
-            # Чередование цветов строк
-            bg_color = "#2b2b2b" if row_idx % 2 == 0 else "#3a3a3a"
-
-            for col_idx, col in enumerate(columns):
+            values = []
+            for col in columns:
                 value = row_data.get(col, "")
-
-                # Форматируем значение
                 formatted_value = self.safe_format_value(value)
+                values.append(formatted_value)
 
-                # Создаем ячейку
-                cell = ctk.CTkLabel(
-                    row_frame,
-                    text=formatted_value,
-                    font=ctk.CTkFont(size=11),
-                    fg_color=bg_color,
-                    height=35,
-                    width=col_width,
-                    anchor="w",
-                    justify="left"
-                )
-                cell.grid(row=0, column=col_idx, sticky="nsew", padx=(1, 0))
+            # Добавляем строку в Treeview
+            item = self.tree.insert("", "end", iid=str(row_idx), values=values)
 
-                # Настраиваем вес колонки
-                row_frame.grid_columnconfigure(col_idx, weight=1)
+            # Альтернативный цвет для четных строк
+            if row_idx % 2 == 0:
+                self.tree.item(item, tags=('even_row',))
+            else:
+                self.tree.item(item, tags=('odd_row',))
+
+        # Настраиваем теги для альтернативных цветов строк
+        self.tree.tag_configure('even_row', background='#2b2b2b')
+        self.tree.tag_configure('odd_row', background='#252525')
+
+    def on_tree_click(self, event):
+        """Обработка клика в Treeview"""
+        region = self.tree.identify("region", event.x, event.y)
+        if region == "heading":
+            column = self.tree.identify_column(event.x)
+            if column != "#0":
+                col_index = int(column.replace("#", "")) - 1
+                columns = self.tree["columns"]
+                if col_index < len(columns):
+                    col_name = columns[col_index]
+                    self.on_header_click(col_name)
 
     def on_header_click(self, column):
-        """Обработка клика на заголовок таблицы с защитой от двойного клика"""
+        """Обработка клика на заголовок таблицы"""
         current_time = datetime.now().timestamp()
 
         # Проверяем, не был ли это двойной клик (менее 0.3 секунды)
@@ -1118,32 +1226,202 @@ class EnhancedNissanGUI:
 
     def detect_schema(self):
         try:
-            sample = self.collection.find_one()
-            if sample:
-                self.all_columns = [col for col in sample.keys() if col != '_id']
+            # Получаем общее количество записей из базы данных
+            total_records = self.collection.count_documents({})
+            print(f"Всего записей в базе: {total_records}")
 
-                cursor = self.collection.find({}, {'_id': 0}).limit(1000)
-                records = list(cursor)
+            if total_records == 0:
+                print("База данных пуста")
+                return
 
-                if records:
-                    df_sample = pd.DataFrame(records)
-                    for col in self.all_columns:
-                        if col in df_sample.columns:
-                            dtype = str(df_sample[col].dtype)
-                            self.column_types[col] = dtype
+            # Берем ВСЕ данные для точной статистики
+            cursor = self.collection.find({}, {'_id': 0})
+            records = list(cursor)
 
-                            if df_sample[col].nunique() < 100:
-                                unique_vals = df_sample[col].dropna().unique().tolist()
-                                unique_vals_str = [str(val) for val in unique_vals]
-                                self.unique_values_cache[col] = sorted(unique_vals_str)[:50]
+            if not records:
+                print("Не удалось получить записи из базы")
+                return
 
-                # Обновляем комбобоксы
-                if self.all_columns:
-                    self.group_by_combo.configure(values=self.all_columns)
-                    self.agg_col_combo.configure(values=self.all_columns)
+            print(f"Получено записей для анализа: {len(records)}")
+
+            df = pd.DataFrame(records)
+            self.all_columns = [col for col in df.columns if col != '_id']
+
+            print(f"Найдено колонок: {len(self.all_columns)}")
+            print(f"Колонки: {self.all_columns}")
+
+            # Вычисляем точную статистику для каждой колонки
+            for col in self.all_columns:
+                if col in df.columns:
+                    # Получаем тип данных
+                    dtype = str(df[col].dtype)
+                    self.column_types[col] = dtype
+
+                    # ТОЧНЫЙ расчет непустых значений
+                    # Проверяем каждое значение на пустоту (None, NaN, пустая строка)
+                    non_empty_count = 0
+                    for value in df[col]:
+                        if pd.isna(value) or value is None:
+                            continue
+                        if isinstance(value, float) and math.isnan(value):
+                            continue
+                        if isinstance(value, str) and value.strip() == "":
+                            continue
+                        non_empty_count += 1
+
+                    # Сохраняем статистику для всех данных
+                    self.column_stats[col] = {
+                        'total': total_records,
+                        'non_empty': non_empty_count,
+                        'empty': total_records - non_empty_count,
+                        'fill_rate': (non_empty_count / total_records * 100) if total_records > 0 else 0
+                    }
+
+                    print(
+                        f"{col}: непустых={non_empty_count:,}, всего={total_records:,}, заполненность={self.column_stats[col]['fill_rate']:.1f}%")
+
+                    # Кэшируем уникальные значения для фильтров
+                    if df[col].nunique() < 100:
+                        unique_vals = df[col].dropna().unique().tolist()
+                        unique_vals_str = [str(val) for val in unique_vals]
+                        self.unique_values_cache[col] = sorted(unique_vals_str)[:50]
+
+            # Обновляем комбобоксы
+            if self.all_columns:
+                self.group_by_combo.configure(values=self.all_columns)
+                self.agg_col_combo.configure(values=self.all_columns)
 
         except Exception as e:
             print(f"Ошибка определения схемы: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def calculate_filtered_column_stats(self):
+        """Рассчитывает статистику по колонкам для отфильтрованных данных"""
+        query = self.build_query()
+
+        # Очищаем предыдущую статистику
+        self.filtered_column_stats.clear()
+
+        try:
+            # Получаем отфильтрованные данные
+            cursor = self.collection.find(query, {'_id': 0})
+            records = list(cursor)
+
+            if not records:
+                # Если нет данных, сбрасываем статистику
+                for col in self.all_columns:
+                    self.filtered_column_stats[col] = {
+                        'total': 0,
+                        'non_empty': 0,
+                        'empty': 0,
+                        'fill_rate': 0
+                    }
+                return
+
+            df = pd.DataFrame(records)
+
+            # Рассчитываем статистику для каждой колонки
+            for col in self.all_columns:
+                if col in df.columns:
+                    # ТОЧНЫЙ расчет непустых значений для отфильтрованных данных
+                    non_empty_count = 0
+                    for value in df[col]:
+                        if pd.isna(value) or value is None:
+                            continue
+                        if isinstance(value, float) and math.isnan(value):
+                            continue
+                        if isinstance(value, str) and value.strip() == "":
+                            continue
+                        non_empty_count += 1
+
+                    # Сохраняем статистику для отфильтрованных данных
+                    self.filtered_column_stats[col] = {
+                        'total': len(records),
+                        'non_empty': non_empty_count,
+                        'empty': len(records) - non_empty_count,
+                        'fill_rate': (non_empty_count / len(records) * 100) if len(records) > 0 else 0
+                    }
+                else:
+                    # Если колонка отсутствует в результатах
+                    self.filtered_column_stats[col] = {
+                        'total': 0,
+                        'non_empty': 0,
+                        'empty': 0,
+                        'fill_rate': 0
+                    }
+
+        except Exception as e:
+            print(f"Ошибка расчета статистики по отфильтрованным данным: {e}")
+            # В случае ошибки сбрасываем статистику
+            for col in self.all_columns:
+                self.filtered_column_stats[col] = {
+                    'total': 0,
+                    'non_empty': 0,
+                    'empty': 0,
+                    'fill_rate': 0
+                }
+
+    def update_all_statistics(self):
+        """Обновляет всю статистику в интерфейсе"""
+        # Обновляем заголовки фильтров
+        for condition in self.filter_conditions:
+            widgets = condition['widgets']
+            col_name = widgets['col_name']
+
+            if col_name:
+                # Используем статистику отфильтрованных данных, если она есть
+                stats_text = ""
+                if col_name in self.filtered_column_stats and not self.aggregation_mode:
+                    stats = self.filtered_column_stats[col_name]
+                    if stats['total'] > 0:
+                        stats_text = f" ({stats['non_empty']:,}/{stats['total']:,})"
+                    else:
+                        stats = self.column_stats.get(col_name, {'non_empty': 0, 'total': 0})
+                        stats_text = f" ({stats['non_empty']:,}/{stats['total']:,})"
+                elif col_name in self.column_stats:
+                    stats = self.column_stats[col_name]
+                    stats_text = f" ({stats['non_empty']:,}/{stats['total']:,})"
+
+                # Обновляем заголовок
+                header_text = f"Фильтр #{condition['id'] + 1}: {col_name}{stats_text}"
+                widgets['header_label'].configure(text=header_text)
+
+        # Обновляем заголовки таблицы
+        self.update_table_headers()
+
+    def update_table_headers(self):
+        """Обновляет заголовки таблицы с актуальной статистикой"""
+        if not self.tree["columns"]:
+            return
+
+        columns = self.tree["columns"]
+
+        for col in columns:
+            # Создаем заголовок с символом сортировки
+            sort_symbol = ""
+            if self.sort_column == col:
+                sort_symbol = " ↑" if self.sort_direction == 1 else " ↓"
+
+            # Добавляем статистику во вторую строку заголовка
+            # Используем статистику для отфильтрованных данных, если она есть
+            stats_text = ""
+            if col in self.filtered_column_stats and not self.aggregation_mode:
+                stats = self.filtered_column_stats[col]
+                if stats['total'] > 0:
+                    stats_text = f"\n({stats['non_empty']:,}/{stats['total']:,})"
+                else:
+                    stats = self.column_stats.get(col, {'non_empty': 0, 'total': 0})
+                    stats_text = f"\n({stats['non_empty']:,}/{stats['total']:,})"
+            elif col in self.column_stats:
+                stats = self.column_stats[col]
+                stats_text = f"\n({stats['non_empty']:,}/{stats['total']:,})"
+
+            # Создаем многострочный текст заголовка
+            header_text = f"{col}{sort_symbol}{stats_text}"
+
+            # Обновляем заголовок колонки
+            self.tree.heading(col, text=header_text)
 
     def apply_aggregation(self):
         group_by = self.group_by_var.get()
@@ -1171,7 +1449,7 @@ class EnhancedNissanGUI:
                 "генерируемая дисперсия": "$stdDevSamp"
             }.get(agg_func, "$sum")
 
-            # Строим пайплайн агрегации с обработкой nan значений как пустых
+            # Строим пайплайн агрегации
             pipeline = []
 
             # Добавляем стадию матча из текущих фильтров
@@ -1179,67 +1457,24 @@ class EnhancedNissanGUI:
             if match_stage:
                 pipeline.append({"$match": match_stage})
 
-            # Стадия группировки с обработкой nan значений
+            # Стадия группировки
             group_stage = {"_id": f"${group_by}"}
 
             if mongo_func == "$count":
                 group_stage["count"] = {"$sum": 1}
             elif agg_col:
-                # Обработка для агрегационных функций с фильтрацией nan
-                if mongo_func in ["$sum", "$avg"]:
-                    group_stage["result"] = {
-                        mongo_func: {
-                            "$cond": {
-                                "if": {"$and": [
-                                    {"$ne": [f"${agg_col}", None]},
-                                    {"$ne": [{"$type": f"${agg_col}"}, "null"]},
-                                    {"$in": [{"$type": f"${agg_col}"}, ["double", "int", "long", "decimal"]]},
-                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
-                                ]},
-                                "then": f"${agg_col}",
-                                "else": 0
-                            }
-                        }
-                    }
-                elif mongo_func in ["$min", "$max", "$first", "$last"]:
-                    # Для min/max/first/last фильтруем nan значения
-                    group_stage["result"] = {
-                        mongo_func: {
-                            "$cond": {
-                                "if": {"$and": [
-                                    {"$ne": [f"${agg_col}", None]},
-                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
-                                ]},
-                                "then": f"${agg_col}",
-                                "else": "$$REMOVE"
-                            }
-                        }
-                    }
-                elif mongo_func in ["$push", "$addToSet"]:
-                    # Для push и addToSet фильтруем пустые и nan значения
-                    group_stage["result"] = {
-                        mongo_func: {
-                            "$cond": {
-                                "if": {"$and": [
-                                    {"$ne": [f"${agg_col}", None]},
-                                    {"$ne": [f"${agg_col}", ""]},
-                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
-                                ]},
-                                "then": f"${agg_col}",
-                                "else": "$$REMOVE"
-                            }
-                        }
-                    }
+                # Для большинства функций просто применяем оператор
+                if mongo_func in ["$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet"]:
+                    group_stage["result"] = {mongo_func: f"${agg_col}"}
                 elif mongo_func in ["$stdDevPop", "$stdDevSamp"]:
-                    # Для стандартного отклонения фильтруем числовые значения и nan
+                    # Для стандартного отклонения фильтруем числовые значения
                     group_stage["result"] = {
                         mongo_func: {
                             "$cond": {
                                 "if": {"$and": [
                                     {"$ne": [f"${agg_col}", None]},
                                     {"$ne": [{"$type": f"${agg_col}"}, "null"]},
-                                    {"$in": [{"$type": f"${agg_col}"}, ["double", "int", "long", "decimal"]]},
-                                    {"$not": [{"$eq": [f"${agg_col}", float('nan')]}]}
+                                    {"$in": [{"$type": f"${agg_col}"}, ["double", "int", "long", "decimal"]]}
                                 ]},
                                 "then": f"${agg_col}",
                                 "else": None
@@ -1255,27 +1490,22 @@ class EnhancedNissanGUI:
 
             pipeline.append({"$group": group_stage})
 
-            # Фильтруем группы с пустыми результатами
-            if mongo_func not in ["$count"] and agg_col:
+            # Фильтруем группы с пустыми результатами для числовых функций
+            if mongo_func in ["$stdDevPop", "$stdDevSamp"]:
                 pipeline.append({"$match": {"result": {"$ne": None}}})
 
-            # Сортировка по результату агрегации
+            # Сортировка
             sort_direction = self.sort_direction if self.sort_column else 1
             if self.sort_column:
-                # Определяем поле для сортировки
-                sort_field = self.sort_column
-                # Если сортируем по результату агрегации
-                if self.sort_column != group_by:
-                    sort_field = "result"
+                sort_field = "result" if self.sort_column != group_by else "_id"
                 pipeline.append({"$sort": {sort_field: sort_direction}})
             else:
                 pipeline.append({"$sort": {"_id": 1}})
 
-            # Выполняем агрегацию с обработкой ошибок
+            # Выполняем агрегацию
             try:
                 result = list(self.collection.aggregate(pipeline, allowDiskUse=True))
             except Exception as agg_error:
-                # Если агрегация не удалась, пытаемся более простым способом
                 print(f"Ошибка агрегации: {agg_error}")
                 messagebox.showwarning("Предупреждение",
                                        f"Ошибка агрегации: {str(agg_error)}\nПопробуйте другие параметры.")
@@ -1295,7 +1525,7 @@ class EnhancedNissanGUI:
             traceback.print_exc()
 
     def display_aggregation_results(self, results, group_by, agg_func, agg_col):
-        """Отображение результатов агрегации с использованием CTk виджетов"""
+        """Отображение результатов агрегации"""
         # Создаем данные для отображения в таблице
         table_data = []
 
@@ -1367,12 +1597,25 @@ class EnhancedNissanGUI:
                 return
 
             query = self.build_query()
-            self.total_records = self.collection.count_documents(query)
+
+            # Исправляем: проверяем запрос перед использованием
+            if query:
+                self.total_records = self.collection.count_documents(query)
+            else:
+                self.total_records = self.collection.count_documents({})
 
             total_all = self.collection.count_documents({})
+
+            # Обновляем метку с количеством записей
             self.records_count_label.configure(
                 text=f"Найдено: {self.total_records:,} из {total_all:,} записей"
             )
+
+            # Рассчитываем статистику по отфильтрованным данным
+            self.calculate_filtered_column_stats()
+
+            # Обновляем всю статистику в интерфейсе
+            self.update_all_statistics()
 
             self.load_page_data()
             self.update_info()
@@ -1410,17 +1653,14 @@ class EnhancedNissanGUI:
                     row_data[col] = val
                 data.append(row_data)
 
-            # Создаем заголовки таблицы
-            self.create_table_headers(self.all_columns)
-
             # Создаем строки с данными
             self.create_table_rows(data)
 
         except Exception as e:
             print(f"Ошибка загрузки данных: {e}")
-            # Создаем пустую таблицу в случае ошибки
-            self.create_table_headers(self.all_columns if self.all_columns else [])
-            self.create_table_rows([])
+            # Очищаем таблицу в случае ошибки
+            for item in self.tree.get_children():
+                self.tree.delete(item)
 
     def update_info(self):
         if self.aggregation_mode:
@@ -1503,102 +1743,6 @@ class EnhancedNissanGUI:
         self.sort_direction = 1
         self.current_page = 0
         self.load_data()
-
-    def show_statistics(self):
-        try:
-            query = self.build_query()
-            cursor = self.collection.find(query, {'_id': 0})
-            data = list(cursor)
-
-            if not data:
-                messagebox.showinfo("Статистика", "Нет данных для отображения статистики")
-                return
-
-            df = pd.DataFrame(data)
-
-            stats_window = ctk.CTkToplevel(self.root)
-            stats_window.title("Расширенная статистика")
-            stats_window.geometry("1000x700")
-
-            # Используем CTkTabview вместо ttk.Notebook
-            notebook = ctk.CTkTabview(stats_window)
-            notebook.pack(fill="both", expand=True, padx=10, pady=10)
-
-            # Общая статистика
-            general_tab = notebook.add("Общая")
-
-            text_widget = ctk.CTkTextbox(general_tab, wrap="word")
-            text_widget.pack(fill="both", expand=True, padx=10, pady=10)
-
-            total_all = self.collection.count_documents({})
-
-            stats_text = "СТАТИСТИКА ДАННЫХ NISSAN\n"
-            stats_text += "=" * 60 + "\n\n"
-            stats_text += f"Всего записей в фильтре: {len(df):,}\n"
-            stats_text += f"Всего записей в базе: {total_all:,}\n"
-            stats_text += f"Процент отображения: {(len(df) / total_all * 100):.1f}%\n\n"
-
-            # Статистика по типам данных
-            stats_text += "ТИПЫ ДАННЫХ:\n"
-            for col in df.columns:
-                dtype = str(df[col].dtype)
-                stats_text += f"  {col}: {dtype}\n"
-            stats_text += "\n"
-
-            stats_text += "=" * 60 + "\n\n"
-
-            # Детальная статистика по столбцам
-            for col in df.columns:
-                # Подсчет непустых значений (исключая nan)
-                non_null = df[col].notna().sum()
-                # Дополнительная проверка на nan для числовых колонок
-                if df[col].dtype in ['float64']:
-                    non_null = df[col].apply(lambda x: not (isinstance(x, float) and math.isnan(x))).sum()
-
-                null_count = len(df) - non_null
-                unique = df[col].nunique()
-                stats_text += f"{col}:\n"
-                stats_text += f"  Непустых значений: {non_null:,}\n"
-                stats_text += f"  Пустых значений (включая nan): {null_count:,}\n"
-                stats_text += f"  Уникальных значений: {unique:,}\n"
-                if non_null > 0:
-                    stats_text += f"  Заполненность: {(non_null / len(df) * 100):.1f}%\n"
-
-                if df[col].dtype in ['int64', 'float64']:
-                    # Исключаем nan из статистики
-                    numeric_values = df[col].dropna()
-                    if not numeric_values.empty:
-                        stats_text += f"  Минимум: {numeric_values.min():.2f}\n"
-                        stats_text += f"  Максимум: {numeric_values.max():.2f}\n"
-                        stats_text += f"  Среднее: {numeric_values.mean():.2f}\n"
-                        stats_text += f"  Медиана: {numeric_values.median():.2f}\n"
-                        stats_text += f"  Стандартное отклонение: {numeric_values.std():.2f}\n"
-                        stats_text += f"  Дисперсия: {numeric_values.var():.2f}\n"
-
-                stats_text += "\n"
-
-            text_widget.insert("1.0", stats_text)
-            text_widget.configure(state="disabled")
-
-            # Статистика корреляции
-            numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-            if len(numeric_cols) > 1:
-                corr_tab = notebook.add("Корреляции")
-
-                corr_text = ctk.CTkTextbox(corr_tab, wrap="word")
-                corr_text.pack(fill="both", expand=True, padx=10, pady=10)
-
-                # Исключаем строки с nan для корреляции
-                numeric_df = df[numeric_cols].dropna()
-                corr_matrix = numeric_df.corr()
-
-                corr_text.insert("1.0", "КОРРЕЛЯЦИОННАЯ МАТРИЦА:\n")
-                corr_text.insert("2.0", "=" * 50 + "\n\n")
-                corr_text.insert("3.0", str(corr_matrix))
-                corr_text.configure(state="disabled")
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка расчета статистики: {str(e)}")
 
     def run(self):
         self.root.mainloop()
