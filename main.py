@@ -7,6 +7,7 @@ from collections import defaultdict
 import math
 import numbers
 import re
+from decimal import Decimal, InvalidOperation
 
 
 class EnhancedNissanGUI:
@@ -21,6 +22,9 @@ class EnhancedNissanGUI:
         self.client = MongoClient('localhost', 27017)
         self.db = self.client['nissan']
         self.collection = self.db['vehicles']
+
+        # Инициализируем базу тестовыми данными
+        self.initialize_test_data()
 
         self.current_page = 0
         self.page_size = 100
@@ -57,7 +61,75 @@ class EnhancedNissanGUI:
         # Для хранения ссылок на заголовки фильтров
         self.filter_header_labels = {}
 
+        # Флаг для определения, используем ли регулярные выражения
+        self.regex_mode_var = ctk.StringVar(value="true")
+
         self.setup_ui()
+
+    def initialize_test_data(self):
+        """Инициализирует базу данных тестовыми записями"""
+        try:
+            # Проверяем, есть ли уже данные
+            count = self.collection.count_documents({})
+            if count == 0:
+                test_data = [
+                    {"id": 1, "full_name": "Dominic Applin", "age": 42, "gender": "Male", "model": "Quest",
+                     "color": "Mauv", "performance": 299, "km": 509305, "condition": "very bad", "price": 40394.91},
+                    {"id": 2, "full_name": "Lenee Eteen", "age": 54, "gender": "Polygender", "model": "R'nessa",
+                     "color": "Orange", "performance": 109, "km": 965853, "condition": "old", "price": 8687.9},
+                    {"id": 3, "full_name": "Kendal Esselin", "age": 37, "gender": "Male", "model": "March / Micra",
+                     "color": "Teal", "performance": 52, "km": 380906, "condition": "bad", "price": 44705.31},
+                    {"id": 4, "full_name": "Nehemiah Marvelley", "age": 55, "gender": "Male", "model": "Gloria",
+                     "color": "Green", "performance": 336, "km": 573171, "condition": "very good", "price": 32889.88},
+                    {"id": 5, "full_name": "Domenic McGeouch", "age": 21, "gender": "Male", "model": "Avenir",
+                     "color": "Khaki", "performance": 2, "km": 809470, "condition": "old", "price": 6949.22},
+                    {"id": 6, "full_name": "Bancroft Le Port", "age": 42, "gender": "Male", "model": "Pulsar",
+                     "color": "Indigo", "performance": 43, "km": 315542, "condition": "bad", "price": 18351.28},
+                    {"id": 7, "full_name": "Arlan Saiger", "age": 39, "gender": "Male", "model": "Gloria",
+                     "color": "Yellow", "performance": 330, "km": 987100, "condition": "old", "price": 40908.59},
+                    {"id": 8, "full_name": "Germaine Nesbitt", "age": 30, "gender": "Genderqueer", "model": "Cedric",
+                     "color": "Turquoise", "performance": 305, "km": 196187, "condition": "bad", "price": 30190.76},
+                    {"id": 9, "full_name": "Nil Dorsey", "age": 60, "gender": "Male", "model": "Cedric Y31",
+                     "color": "Crimson", "performance": 282, "km": 355473, "condition": "bad", "price": 39347.3},
+                    {"id": 10, "full_name": "Meghan Manilove", "age": 43, "gender": "Female", "model": "Townstar",
+                     "color": "Khaki", "performance": 143, "km": 803432, "condition": "old", "price": 32741.96},
+                    {"id": 11, "full_name": "Rayna Chong", "age": 42, "gender": "Polygender",
+                     "model": "Bluebird Sylphy", "color": "Fuscia", "performance": 174, "km": 474229,
+                     "condition": "bad", "price": 29325.01},
+                    {"id": 12, "full_name": "Corny Jansema", "age": 22, "gender": "Male", "model": "Xterra",
+                     "color": "Yellow", "performance": 46, "km": 66616, "condition": "new", "price": 19907.9},
+                    {"id": 13, "full_name": "Sammie Bissell", "age": 58, "gender": "Male", "model": "Cima",
+                     "color": "Yellow", "performance": 333, "km": 728227, "condition": "very bad", "price": 13035.25},
+                    {"id": 14, "full_name": "Aleen Wrightam", "age": 49, "gender": "Female", "model": "Almera",
+                     "color": "Yellow", "performance": 138, "km": 475984, "condition": "bad", "price": 42349.49},
+                    {"id": 15, "full_name": "Shelley Twiname", "age": 33, "gender": "Genderfluid", "model": "Murano",
+                     "color": "Fuscia", "performance": 208, "km": 230029, "condition": "bad", "price": 20136.31},
+                    {"id": 16, "full_name": "Carine Charnley", "age": 32, "gender": "Female",
+                     "model": "Bluebird Sylphy", "color": "Maroon", "performance": 187, "km": 209748,
+                     "condition": "bad", "price": 29389.02},
+                    {"id": 17, "full_name": "Ezequiel Caisley", "age": 37, "gender": "Male", "model": "Frontier",
+                     "color": "Yellow", "performance": 231, "km": 508091, "condition": "very bad", "price": 42555.03},
+                    {"id": 18, "full_name": "Silas Bowlesworth", "age": 48, "gender": "Male", "model": "Sentra",
+                     "color": "Yellow", "performance": 145, "km": 252099, "condition": "bad", "price": 44868.56},
+                    {"id": 19, "full_name": "Ray Brabyn", "age": 30, "gender": "Male", "model": "Rogue Sport",
+                     "color": "Fuscia", "performance": 175, "km": 706568, "condition": "very bad", "price": 37190.71},
+                    {"id": 20, "full_name": "John Doe", "age": 25, "gender": "Male", "model": "Altima", "color": "Blue",
+                     "performance": 150, "km": 100000, "condition": "good", "price": 25000.00},
+                    {"id": 21, "full_name": "Jane Smith", "age": 35, "gender": "Female", "model": "Maxima",
+                     "color": "Red", "performance": 280, "km": 50000, "condition": "excellent", "price": 35000.00},
+                    {"id": 22, "full_name": "Bob Johnson", "age": 45, "gender": "Male", "model": "Pathfinder",
+                     "color": "Black", "performance": 210, "km": 150000, "condition": "average", "price": 28000.00},
+                    {"id": 23, "full_name": "Alice Brown", "age": 28, "gender": "Female", "model": "Leaf",
+                     "color": "White", "performance": 147, "km": 30000, "condition": "new", "price": 32000.00},
+                    {"id": 24, "full_name": "Charlie Wilson", "age": 52, "gender": "Male", "model": "Armada",
+                     "color": "Silver", "performance": 390, "km": 200000, "condition": "old", "price": 42000.00},
+                    {"id": 25, "full_name": "Emma Davis", "age": 31, "gender": "Female", "model": "Rogue",
+                     "color": "Gray", "performance": 170, "km": 80000, "condition": "good", "price": 27000.00}
+                ]
+                self.collection.insert_many(test_data)
+                print(f"Добавлено {len(test_data)} тестовых записей")
+        except Exception as e:
+            print(f"Ошибка инициализации тестовых данных: {e}")
 
     def setup_ui(self):
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -96,7 +168,7 @@ class EnhancedNissanGUI:
         self.load_initial_data()
 
     def configure_treeview_style(self):
-        """Настраивает стиль для Treeview с четкими границами ячеек"""
+        """Настраивает стиль для Treeview без границ ячеек"""
         style = ttk.Style()
         style.theme_use("clam")
 
@@ -104,25 +176,24 @@ class EnhancedNissanGUI:
         bg_color = "#2b2b2b"  # Цвет фона ячеек
         fg_color = "white"  # Цвет текста
         heading_bg = "#3a3a3a"  # Цвет заголовков
-        border_color = "#555555"  # Цвет границ
         selected_bg = "#4a7aba"  # Цвет выделения
 
-        # Основной стиль Treeview
+        # Основной стиль Treeview - убираем ВСЕ границы
         style.configure("Treeview",
                         background=bg_color,
                         foreground=fg_color,
                         fieldbackground=bg_color,
-                        borderwidth=1,
-                        relief="solid",  # Добавляем рельеф для границ
+                        borderwidth=0,
+                        relief="flat",
                         font=('TkDefaultFont', 10),
                         rowheight=25)
 
-        # Стиль заголовков
+        # Стиль заголовков без границ
         style.configure("Treeview.Heading",
                         background=heading_bg,
                         foreground=fg_color,
-                        relief="raised",  # Выпуклые заголовки
-                        borderwidth=2,
+                        relief="flat",
+                        borderwidth=0,
                         font=('TkDefaultFont', 10, 'bold'),
                         padding=(5, 5, 5, 22))
 
@@ -133,18 +204,24 @@ class EnhancedNissanGUI:
 
         # Настраиваем цвета для заголовков при наведении
         style.map("Treeview.Heading",
-                  background=[('active', '#4a4a4a')],
-                  relief=[('pressed', 'sunken')])
+                  background=[('active', '#4a4a4a')])
 
-        # Переопределяем layout для ячеек с явными границами
+        # Убираем границы вокруг ячеек
         style.layout("Treeview.Item", [
             ('Treeitem.padding', {
                 'sticky': 'nswe',
                 'children': [
                     ('Treeitem.indicator', {'side': 'left', 'sticky': ''}),
                     ('Treeitem.image', {'side': 'left', 'sticky': ''}),
-                    ('Treeitem.text', {'side': 'left', 'sticky': 'we'})
+                    ('Treeitem.text', {'side': 'left', 'sticky': ''})
                 ]
+            })
+        ])
+
+        # Убираем линии-разделители между ячейками
+        style.layout("Treeview", [
+            ('Treeview.treearea', {
+                'sticky': 'nswe'
             })
         ])
 
@@ -152,16 +229,12 @@ class EnhancedNissanGUI:
         style.configure("Vertical.TScrollbar",
                         background=heading_bg,
                         troughcolor=bg_color,
-                        bordercolor=border_color,
-                        arrowcolor=fg_color,
-                        borderwidth=1)
+                        arrowcolor=fg_color)
 
         style.configure("Horizontal.TScrollbar",
                         background=heading_bg,
                         troughcolor=bg_color,
-                        bordercolor=border_color,
-                        arrowcolor=fg_color,
-                        borderwidth=1)
+                        arrowcolor=fg_color)
 
     def create_filters_panel(self, parent):
         filters_container = ctk.CTkFrame(parent)
@@ -172,6 +245,13 @@ class EnhancedNissanGUI:
 
         ctk.CTkLabel(filter_header, text="🔍 Фильтры",
                      font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+
+        # Кнопка переключения режима регулярных выражений
+        self.regex_toggle = ctk.CTkSwitch(filter_header, text="Рег.выражения",
+                                          variable=self.regex_mode_var,
+                                          onvalue="true", offvalue="false",
+                                          command=self.toggle_regex_mode)
+        self.regex_toggle.pack(side="left", padx=20)
 
         ctk.CTkButton(filter_header, text="Очистить все",
                       width=80, command=self.clear_all_filters).pack(side="right", padx=5)
@@ -187,6 +267,29 @@ class EnhancedNissanGUI:
             corner_radius=8
         )
         self.filters_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    def toggle_regex_mode(self):
+        """Переключает режим регулярных выражений"""
+        if self.regex_mode_var.get() == "true":
+            messagebox.showinfo("Режим регулярных выражений",
+                                "Режим регулярных выражений включен.\n\n"
+                                "В полях фильтрации теперь можно использовать:\n"
+                                "- .* - любая последовательность символов\n"
+                                "- ^ - начало строки\n"
+                                "- $ - конец строки\n"
+                                "- [abc] - любой из символов a, b, c\n"
+                                "- [a-z] - любой символ от a до z\n"
+                                "- \\d - любая цифра\n"
+                                "- \\w - любой буквенно-цифровой символ\n"
+                                "- + - один или более раз\n"
+                                "- * - ноль или более раз\n"
+                                "- ? - ноль или один раз\n\n"
+                                "Примеры:\n"
+                                "- ^A.* - начинается с A\n"
+                                "- .*bad.* - содержит 'bad'\n"
+                                "- ^2[0-9]$ - возраст 20-29\n"
+                                "- ^[5-9]\\d{5,}$ - пробег >500000")
+        self.load_data()
 
     def create_filter_for_column(self, col_name, index):
         """Создает стандартный фильтр для конкретного столбца"""
@@ -302,10 +405,14 @@ class EnhancedNissanGUI:
                              lambda e, fid=filter_id, idx=row_index: self.on_value_logic_change(fid, idx))
 
         # Оператор сравнения для этого значения
-        operator_var = ctk.StringVar(value="равно")
+        operator_var = ctk.StringVar(value="содержит")
+        operator_values = ["равно", "не равно", "больше", "больше или равно",
+                           "меньше", "меньше или равно", "в списке", "не в списке",
+                           "содержит", "не содержит", "начинается с", "заканчивается на",
+                           "regex содержит", "regex не содержит"]
+
         operator_combo = ctk.CTkComboBox(row_frame,
-                                         values=["равно", "не равно", "больше", "больше или равно",
-                                                 "меньше", "меньше или равно", "в списке", "не в списке"],
+                                         values=operator_values,
                                          variable=operator_var,
                                          width=160,
                                          height=28)
@@ -359,6 +466,9 @@ class EnhancedNissanGUI:
             # Для операторов "в списке" и "не в списке" показываем подсказку
             if operator in ["в списке", "не в списке"]:
                 row['value_entry'].configure(placeholder_text="Через запятую")
+            # Для операторов регулярных выражений показываем подсказку
+            elif operator in ["regex содержит", "regex не содержит"]:
+                row['value_entry'].configure(placeholder_text="Введите регулярное выражение")
             else:
                 row['value_entry'].configure(placeholder_text="Введите значение")
 
@@ -535,35 +645,63 @@ class EnhancedNissanGUI:
         return final_query
 
     def build_search_conditions(self, search_value):
-        """Строит условия поиска по всем полям"""
+        """Строит условия поиска по всем полям с поддержкой регулярных выражений"""
         if not search_value:
             return None
 
         try:
-            # Создаем список условий для поиска по все полям
+            # Всегда используем режим regex для поиска
+            is_regex = True
+
+            # Проверяем, является ли значение валидным регулярным выражением
+            try:
+                re.compile(search_value)
+                # Это валидное регулярное выражение
+                pattern = search_value
+                is_valid_regex = True
+            except:
+                # Не валидное regex, используем как обычный текст
+                pattern = re.escape(search_value)
+                is_valid_regex = False
+
+            # Создаем список условий для поиска по всем полям
             or_conditions = []
 
-            # Пытаемся определить, является ли поисковое значение числом
-            is_numeric = False
-            numeric_value = None
+            # Определяем числовые поля
+            numeric_fields = ['id', 'age', 'performance', 'km', 'price']
 
-            try:
-                if '.' in search_value:
-                    numeric_value = float(search_value)
-                else:
-                    numeric_value = int(search_value)
-                is_numeric = True
-            except ValueError:
-                is_numeric = False
-
-            # Создаем условия для каждого поля
+            # Для числовых полей нужно специальное условие для regex
             for col in self.all_columns:
-                # Для числовых значений пытаемся искать как число
-                if is_numeric:
-                    or_conditions.append({col: numeric_value})
-
-                # Всегда добавляем строковый поиск (регистронезависимый)
-                or_conditions.append({col: {"$regex": search_value, "$options": "i"}})
+                if col in numeric_fields:
+                    # Для числовых полей преобразуем в строку для regex поиска
+                    if is_valid_regex:
+                        # Для валидных regex создаем условие $toString для преобразования числа в строку
+                        or_conditions.append({
+                            "$expr": {
+                                "$regexMatch": {
+                                    "input": {"$toString": f"${col}"},
+                                    "regex": pattern,
+                                    "options": "i"
+                                }
+                            }
+                        })
+                    else:
+                        # Для простого текста используем прямое сравнение через $regex
+                        or_conditions.append({
+                            "$expr": {
+                                "$regexMatch": {
+                                    "input": {"$toString": f"${col}"},
+                                    "regex": pattern,
+                                    "options": "i"
+                                }
+                            }
+                        })
+                else:
+                    # Для текстовых полей используем обычный regex поиск
+                    if is_valid_regex:
+                        or_conditions.append({col: {"$regex": pattern, "$options": "i"}})
+                    else:
+                        or_conditions.append({col: {"$regex": pattern, "$options": "i"}})
 
             # Если есть условия поиска, возвращаем их
             if or_conditions:
@@ -591,7 +729,7 @@ class EnhancedNissanGUI:
                 vc = value_conditions[0]
                 return self.build_single_condition(col, vc['operator'], vc['value'])
 
-            # Если несколько условий, объединяем их с учетом логических операторов
+            # Если несколько условия, объединяем их с учетом логических операторов
             conditions = []
 
             for vc in value_conditions:
@@ -619,7 +757,6 @@ class EnhancedNissanGUI:
                 elif logic == "ИЛИ":
                     combined_condition = {"$or": [combined_condition, conditions[i]]}
                 elif logic == "НЕ":
-                    # Для НЕ используем $not только для одного условия
                     combined_condition = {"$and": [combined_condition, {"$not": conditions[i]}]}
 
             return combined_condition
@@ -629,108 +766,197 @@ class EnhancedNissanGUI:
             return None
 
     def build_single_condition(self, col, operator, value):
-        """Строит одно условие для MongoDB с учетом nan значений как пустых"""
+        """Строит одно условие для MongoDB с обработкой числовых значений и регулярных выражений"""
         if not col or not value:
             return None
 
         try:
-            # Определяем MongoDB оператор
-            mongo_operator = {
-                "равно": "$eq",
-                "не равно": "$ne",
-                "больше": "$gt",
-                "больше или равно": "$gte",
-                "меньше": "$lt",
-                "меньше или равно": "$lte",
-                "в списке": "$in",
-                "не в списке": "$nin"
-            }.get(operator, "$eq")
+            # Проверяем специальные значения
+            if value.lower() in ["nan", "null", "none", "[пусто]", ""]:
+                # Обработка пустых значений
+                if operator == "равно":
+                    return {"$or": [
+                        {col: None},
+                        {col: {"$type": "null"}},
+                        {col: float('nan')}
+                    ]}
+                elif operator == "не равно":
+                    return {"$nor": [
+                        {col: None},
+                        {col: {"$type": "null"}},
+                        {col: float('nan')}
+                    ]}
+                else:
+                    return None
 
-            # Для операторов сравнения
-            if mongo_operator in ["$eq", "$ne", "$gt", "$gte", "$lt", "$lte"]:
-                # Обработка специальных значений
-                if value.lower() == "nan" or value == "" or value == "[ПУСТО]":
-                    # Для nan и пустых значений
-                    if operator == "равно":
-                        return {"$or": [
-                            {col: None},
-                            {col: {"$type": "null"}},
-                            {col: float('nan')}
-                        ]}
-                    elif operator == "не равно":
-                        # Исправляем: используем $nor вместо $and с $not
-                        return {"$nor": [
-                            {col: None},
-                            {col: {"$type": "null"}},
-                            {col: float('nan')}
-                        ]}
+            # Определяем, является ли поле числовым
+            is_numeric_field = col in ['id', 'age', 'performance', 'km', 'price']
+
+            # Для операторов "regex содержит" и "regex не содержит" - всегда используем regex
+            if operator in ["regex содержит", "regex не содержит"]:
+                try:
+                    # Проверяем валидность regex
+                    re.compile(value)
+
+                    if is_numeric_field:
+                        # Для числовых полей используем $toString для преобразования в строку
+                        if operator == "regex содержит":
+                            return {
+                                "$expr": {
+                                    "$regexMatch": {
+                                        "input": {"$toString": f"${col}"},
+                                        "regex": value,
+                                        "options": "i"
+                                    }
+                                }
+                            }
+                        else:  # "regex не содержит"
+                            return {
+                                "$expr": {
+                                    "$not": {
+                                        "$regexMatch": {
+                                            "input": {"$toString": f"${col}"},
+                                            "regex": value,
+                                            "options": "i"
+                                        }
+                                    }
+                                }
+                            }
                     else:
-                        # Для других операторов с пустыми значениями возвращаем None
+                        # Для текстовых полей используем обычный regex
+                        if operator == "regex содержит":
+                            return {col: {"$regex": value, "$options": "i"}}
+                        else:  # "regex не содержит"
+                            return {col: {"$not": {"$regex": value, "$options": "i"}}}
+
+                except re.error as e:
+                    messagebox.showwarning("Ошибка регулярного выражения",
+                                           f"Некорректное регулярное выражение: {str(e)}")
+                    return None
+
+            # Для текстовых операторов (содержит, не содержит, начинается с, заканчивается на)
+            elif operator in ["содержит", "не содержит", "начинается с", "заканчивается на"]:
+                # Создаем pattern в зависимости от оператора
+                if operator == "содержит":
+                    pattern = re.escape(value)
+                elif operator == "не содержит":
+                    pattern = re.escape(value)
+                elif operator == "начинается с":
+                    pattern = "^" + re.escape(value)
+                elif operator == "заканчивается на":
+                    pattern = re.escape(value) + "$"
+
+                if is_numeric_field:
+                    # Для числовых полей преобразуем в строку
+                    if operator == "не содержит":
+                        return {
+                            "$expr": {
+                                "$not": {
+                                    "$regexMatch": {
+                                        "input": {"$toString": f"${col}"},
+                                        "regex": pattern,
+                                        "options": "i"
+                                    }
+                                }
+                            }
+                        }
+                    else:
+                        return {
+                            "$expr": {
+                                "$regexMatch": {
+                                    "input": {"$toString": f"${col}"},
+                                    "regex": pattern,
+                                    "options": "i"
+                                }
+                            }
+                        }
+                else:
+                    # Для текстовых полей используем обычный regex
+                    if operator == "не содержит":
+                        return {col: {"$not": {"$regex": pattern, "$options": "i"}}}
+                    else:
+                        return {col: {"$regex": pattern, "$options": "i"}}
+
+            # Для числовых операторов (равно, не равно, больше, меньше и т.д.)
+            elif operator in ["равно", "не равно", "больше", "больше или равно", "меньше", "меньше или равно"]:
+                # Пробуем преобразовать в число
+                is_numeric_value = False
+                numeric_value = None
+
+                try:
+                    # Убираем возможные пробелы и запятые
+                    clean_value = value.replace(' ', '').replace(',', '')
+                    # Пробуем преобразовать в Decimal
+                    numeric_value = Decimal(clean_value)
+                    if numeric_value == numeric_value.to_integral_value():
+                        numeric_value = int(numeric_value)
+                    else:
+                        numeric_value = float(numeric_value)
+                    is_numeric_value = True
+                except (ValueError, InvalidOperation):
+                    is_numeric_value = False
+
+                # Если значение числовое и поле числовое
+                if is_numeric_field and is_numeric_value:
+                    operator_map = {
+                        "равно": "$eq",
+                        "не равно": "$ne",
+                        "больше": "$gt",
+                        "больше или равно": "$gte",
+                        "меньше": "$lt",
+                        "меньше или равно": "$lte"
+                    }
+
+                    if operator in operator_map:
+                        return {col: {operator_map[operator]: numeric_value}}
+
+                # Если значение не числовое или поле не числовое
+                else:
+                    # Используем строковое сравнение
+                    if operator == "равно":
+                        return {col: value}
+                    elif operator == "не равно":
+                        return {col: {"$ne": value}}
+                    else:
+                        # Для других операторов с нечисловыми значениями возвращаем None
                         return None
 
-                # Пытаемся преобразовать в число
-                try:
-                    if '.' in value:
-                        num_value = float(value)
-                    else:
-                        num_value = int(value)
-
-                    return {col: {mongo_operator: num_value}}
-                except ValueError:
-                    # Если не число, используем как строку
-                    return {col: {mongo_operator: value}}
-
             # Для операторов списка
-            elif mongo_operator in ["$in", "$nin"]:
+            elif operator in ["в списке", "не в списке"]:
                 # Разделяем значения, если они введены через запятую
                 if ',' in value:
                     values_list = [v.strip() for v in value.split(',')]
                 else:
                     values_list = [value]
 
-                # Пытаемся преобразовать в числа
-                numeric_values = []
-                string_values = []
-
+                # Преобразуем числовые значения если поле числовое
+                final_values = []
                 for val in values_list:
-                    # Проверяем на специальные значения
-                    if val.lower() == "nan" or val == "" or val == "[ПУСТО]":
-                        # Для nan добавляем специальную обработку
-                        if mongo_operator == "$in":
-                            return {"$or": [
-                                {col: None},
-                                {col: {"$type": "null"}},
-                                {col: float('nan')}
-                            ]}
-                        else:  # $nin
-                            # Исправляем: используем $nor вместо $and с $not
-                            return {"$nor": [
-                                {col: None},
-                                {col: {"$type": "null"}},
-                                {col: float('nan')}
-                            ]}
+                    if is_numeric_field:
+                        try:
+                            clean_val = val.replace(' ', '').replace(',', '')
+                            num_val = Decimal(clean_val)
+                            if num_val == num_val.to_integral_value():
+                                final_values.append(int(num_val))
+                            else:
+                                final_values.append(float(num_val))
+                        except (ValueError, InvalidOperation):
+                            final_values.append(val)
+                    else:
+                        final_values.append(val)
 
-                    try:
-                        if '.' in val:
-                            num_val = float(val)
-                        else:
-                            num_val = int(val)
-                        numeric_values.append(num_val)
-                    except ValueError:
-                        string_values.append(val)
+                if operator == "в списке":
+                    return {col: {"$in": final_values}}
+                else:  # "не в списке"
+                    return {col: {"$nin": final_values}}
 
-                # Если есть только числа, используем их
-                if numeric_values and not string_values:
-                    return {col: {mongo_operator: numeric_values}}
-                # Если есть только строки, используем их
-                elif string_values and not numeric_values:
-                    return {col: {mongo_operator: string_values}}
-                # Если есть и то и другое, используем строки
-                else:
-                    return {col: {mongo_operator: values_list}}
+            else:
+                return None
 
         except Exception as e:
-            print(f"Ошибка построения условия: {e}")
+            print(f"Ошибка построения условия для {col} с оператором {operator} и значением {value}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def create_search_panel(self, parent):
@@ -757,7 +983,7 @@ class EnhancedNissanGUI:
         self.search_entry = ctk.CTkEntry(
             search_inner_frame,
             height=32,
-            placeholder_text="Введите текст для поиска по всем полям"
+            placeholder_text="Введите текст или регулярное выражение"
         )
         self.search_entry.grid(row=0, column=2, sticky="ew", padx=(0, 8))
         self.search_entry.bind("<Return>", lambda e: self.apply_search())
@@ -795,7 +1021,7 @@ class EnhancedNissanGUI:
         h_scrollbar = ctk.CTkScrollbar(tree_container, orientation="horizontal")
         h_scrollbar.pack(side="bottom", fill="x")
 
-        # Создаем Treeview с расширенными параметрами для границ
+        # Создаем Treeview без границ
         self.tree = ttk.Treeview(
             tree_container,
             yscrollcommand=v_scrollbar.set,
@@ -1734,7 +1960,7 @@ class EnhancedNissanGUI:
             # Очищаем поле ввода в первой строке
             if widgets['value_rows']:
                 widgets['value_rows'][0]['value_entry'].delete(0, 'end')
-                widgets['value_rows'][0]['operator_var'].set("равно")
+                widgets['value_rows'][0]['operator_var'].set("содержит")
                 if widgets['value_rows'][0]['logic_var']:
                     widgets['value_rows'][0]['logic_var'].set("И")
 
